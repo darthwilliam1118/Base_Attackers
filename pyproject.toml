@@ -1,0 +1,30 @@
+[project]
+name = "base_attackers"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "arcade>=3.3.3,<4.0",
+    "arcade-game-framework @ git+https://github.com/darthwilliam1118/arcade-game-framework@da37339",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "ruff",
+    "black",
+    "cookiecutter",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
