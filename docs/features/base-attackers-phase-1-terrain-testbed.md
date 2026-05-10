@@ -136,7 +136,8 @@ Copy the following into `base_attackers/assets/`:
 **User action required — select a player ship sprite:**
 - Browse Kenney Space Shooter Redux pack
 - Pick a ship sprite that faces right (this is a side-scroller)
-- Copy to `assets/images/ships/player_ship.png`
+- Copy to `assets/images/PNG/player_ship1.png`
+- Copy to `assets/images/PNG/player_ship2.png`
 
 Terrain tile assets are **not needed yet** — chosen after Phase 1
 playtest based on which renderer is selected.
