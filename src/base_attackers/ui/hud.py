@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Optional
 import arcade
 from agf.ui.hud_base import HUDBase
-from agf.ui.text_utils import FONT_MAIN, FONT_THIN
+from agf.ui.text_utils import FONT_THIN
 
 
 class HUD(HUDBase):
@@ -27,18 +27,18 @@ class HUD(HUDBase):
         self._score_text = arcade.Text(
             "SCORE: 0", 16, y,
             arcade.color.WHITE, 16,
-            font_name=FONT_MAIN, anchor_y="center",
+            font_name=FONT_THIN, anchor_y="center",
         )
         self._lives_text = arcade.Text(
             "LIVES: 3", w - 16, y,
             arcade.color.WHITE, 16,
-            font_name=FONT_MAIN,
+            font_name=FONT_THIN,
             anchor_x="right", anchor_y="center",
         )
         self._level_text = arcade.Text(
             "LEVEL: 1", w / 2, y,
             arcade.color.WHITE, 16,
-            font_name=FONT_MAIN,
+            font_name=FONT_THIN,
             anchor_x="center", anchor_y="center",
         )
 

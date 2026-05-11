@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Optional
 import arcade
-from agf.ui.text_utils import FONT_MAIN
+from agf.ui.text_utils import FONT_THIN
 
 # Sound effects — uncomment when adding sfx:
 # from agf.paths import resource_path
@@ -111,7 +111,7 @@ class RunLevelView(arcade.View):
                 "PAUSED",
                 w / 2, h / 2,
                 arcade.color.WHITE, 48,
-                font_name=FONT_MAIN,
+                font_name=FONT_THIN,
                 anchor_x="center", anchor_y="center",
             )
 

@@ -7,7 +7,7 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING, Optional
 import arcade
-from agf.ui.text_utils import FONT_MAIN, centered_text
+from agf.ui.text_utils import FONT_THIN, centered_text
 
 if TYPE_CHECKING:
     from src.base_attackers.state import GameStateManager
@@ -30,7 +30,7 @@ class PlayerKilledView(arcade.View):
             w, h // 2,
             font_size=36,
             color=arcade.color.RED,
-            font_name=FONT_MAIN,
+            font_name=FONT_THIN,
         )
 
     def on_update(self, delta_time: float) -> None:

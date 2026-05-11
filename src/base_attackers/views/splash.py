@@ -9,7 +9,8 @@ if TYPE_CHECKING:
 
 
 class SplashView(_AGFSplash):
-    TITLE_LINE1 = "Base Attackers"
+    TITLE_LINE1 = "Base Attackers!"
+    TITLE_LINE2 = ""
     AUTO_ADVANCE = 5.0
 
     def __init__(self, manager: "GameStateManager") -> None:
@@ -17,10 +18,12 @@ class SplashView(_AGFSplash):
         super().__init__(on_complete=self._go_to_main)
 
     def _preload_tracks(self) -> None:
-        # Load music tracks here, e.g.:
-        # self.window.music.load_track("menu")
-        # self.window.music.load_track("level_1")
-        self._assets_ready = True  # remove this line once tracks added
+        self.window.music.load_track("ending")
+        self._assets_ready = True
+
+    def on_show_view(self) -> None:
+        super().on_show_view()
+        self.window.music.play("ending")
 
     def _go_to_main(self) -> None:
         from src.base_attackers.state import GameState

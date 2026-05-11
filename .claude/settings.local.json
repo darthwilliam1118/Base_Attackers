@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/darth/Code/Space_Attackers/src/**)",
+      "Bash(find \"C:\\\\Users\\\\darth\\\\Code\\\\Space_Attackers\\\\src\" -name \"text_utils.py\" -o -name \"*text*.py\" | head -20)",
+      "Read(//c/Users/darth/Code/Space_Attackers/**)",
+      "Bash(python3 -c \"from pathlib import Path; import sys; sys.path.insert\\(0, 'C:\\\\\\\\Users\\\\\\\\darth\\\\\\\\Code\\\\\\\\Space_Attackers'\\); from agf.ui.text_utils import FONT_MAIN, FONT_THIN; print\\(f'FONT_MAIN={FONT_MAIN}'\\); print\\(f'FONT_THIN={FONT_THIN}'\\)\")",
+      "Bash(python -c \"import main\")"
+    ]
+  }
+}

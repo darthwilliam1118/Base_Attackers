@@ -9,13 +9,14 @@ if TYPE_CHECKING:
 
 
 class MainMenuView(_AGFMainMenu):
+    TITLE = "Base Attackers!"
 
     def __init__(self, manager: "GameStateManager") -> None:
         super().__init__()
         self._manager = manager
 
     def music_track(self) -> str | None:
-        return None  # set to your track key once you add menu music
+        return "ending"
 
     def on_start_1p(self) -> None:
         from src.base_attackers.state import GameState
