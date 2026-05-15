@@ -21,6 +21,9 @@ class GameWindow(ScrollingGameWindow):
         cfg = GameConfig.load()
         super().__init__(cfg, cfg.background, SCREEN_TITLE)
 
+        # arcade.get_fps() returns 0 unless timings are enabled.
+        arcade.enable_timings()
+
         self.music.set_volume(cfg.music_volume)
         # Preload and start the "ending" track — used on the splash, menu,
         # and every between-level screen.

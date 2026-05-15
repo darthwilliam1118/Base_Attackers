@@ -129,15 +129,15 @@ Copy the following into `base_attackers/assets/`:
 
 **User action required — copy these manually from Space Attackers:**
 - `assets/fonts/` — entire folder (KenVector Future TTF files)
-- `assets/images/explosions/` — entire folder
-- `assets/images/bullets/` — entire folder
-- `assets/sounds/` — entire folder (SFX only, not music)
+- `assets/images/exp2_0.png` — explosions
+- `assets/images/PNG/Lasers/` — entire folder
+- `assets/sounds/` — entire folder (SFX and music)
 
 **User action required — select a player ship sprite:**
 - Browse Kenney Space Shooter Redux pack
 - Pick a ship sprite that faces right (this is a side-scroller)
-- Copy to `assets/images/PNG/player_ship1.png`
-- Copy to `assets/images/PNG/player_ship2.png`
+- Copy to `assets/images/PNG/playerShip1.png`
+- Copy to `assets/images/PNG/playerShip2.png`
 
 Terrain tile assets are **not needed yet** — chosen after Phase 1
 playtest based on which renderer is selected.

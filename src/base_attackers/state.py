@@ -1,14 +1,11 @@
 """GameStateManager for Base Attackers."""
+
 from __future__ import annotations
 
 import logging
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any
 
 from agf.state import BaseGameStateManager
-
-if TYPE_CHECKING:
-    import arcade
 
 log = logging.getLogger(__name__)
 
@@ -24,6 +21,7 @@ class GameState(Enum):
     PLAYER_KILLED = auto()
     GAME_OVER = auto()
     SCORE_ENTRY = auto()
+    TERRAIN_TEST = auto()
     EXIT = auto()
 
 
@@ -37,6 +35,7 @@ class GameStateManager(BaseGameStateManager):
         from src.base_attackers.views.player_killed import PlayerKilledView
         from src.base_attackers.views.game_over import GameOverView
         from src.base_attackers.views.score_entry import ScoreEntryView
+        from src.base_attackers.views.terrain_test import TerrainTestView
 
         match state:
             case GameState.SPLASH:
@@ -59,8 +58,11 @@ class GameStateManager(BaseGameStateManager):
                 self.window.show_view(GameOverView(self))
             case GameState.SCORE_ENTRY:
                 self.window.show_view(ScoreEntryView(self))
+            case GameState.TERRAIN_TEST:
+                self.window.show_view(TerrainTestView(self))
             case GameState.EXIT:
                 import arcade
+
                 arcade.exit()
 
     def _handle_game_init(self) -> None:

@@ -5,7 +5,20 @@
       "Bash(find \"C:\\\\Users\\\\darth\\\\Code\\\\Space_Attackers\\\\src\" -name \"text_utils.py\" -o -name \"*text*.py\" | head -20)",
       "Read(//c/Users/darth/Code/Space_Attackers/**)",
       "Bash(python3 -c \"from pathlib import Path; import sys; sys.path.insert\\(0, 'C:\\\\\\\\Users\\\\\\\\darth\\\\\\\\Code\\\\\\\\Space_Attackers'\\); from agf.ui.text_utils import FONT_MAIN, FONT_THIN; print\\(f'FONT_MAIN={FONT_MAIN}'\\); print\\(f'FONT_THIN={FONT_THIN}'\\)\")",
-      "Bash(python -c \"import main\")"
+      "Bash(python -c \"import main\")",
+      "Bash(Get-ChildItem -Path \"assets\" -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object Name)",
+      "PowerShell(cd \"C:\\\\Users\\\\darth\\\\Code\\\\Base_Attackers\"; ls -Recurse -Directory -Depth 2 | Where-Object { $_.Parent.Name -eq \"Base_Attackers\" -or $_.Parent.Parent.Name -eq \"Base_Attackers\" } | Select-Object FullName)",
+      "Bash(python -c \"import arcade; print\\('get_fps:', hasattr\\(arcade, 'get_fps'\\)\\); print\\('KEY_1:', hasattr\\(arcade.key, 'KEY_1'\\), 'NUM_1:', hasattr\\(arcade.key, 'NUM_1'\\)\\); from pyglet.math import Vec2; print\\('Vec2 ok'\\)\")",
+      "Bash(python -c \"import arcade; import inspect; print\\(inspect.signature\\(arcade.get_fps\\)\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(ruff check *)",
+      "Bash(black --check src/base_attackers/terrain/ src/base_attackers/views/terrain_test.py src/base_attackers/state.py src/base_attackers/views/main_menu.py)",
+      "Bash(black src/base_attackers/terrain/ src/base_attackers/views/terrain_test.py src/base_attackers/state.py src/base_attackers/views/main_menu.py)",
+      "Bash(black src/base_attackers/views/terrain_test.py)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('src/base_attackers/views/terrain_test.py'\\).read\\(\\)\\); print\\('syntax OK'\\)\")",
+      "Bash(black --check src/base_attackers/)",
+      "Bash(python -c \"import arcade, inspect; print\\(inspect.signature\\(arcade.draw_lrbt_rectangle_filled\\)\\)\")"
     ]
   }
 }
