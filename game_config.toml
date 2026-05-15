@@ -6,7 +6,7 @@ effects_volume = 80
 debug = false
 god_mode = false
 max_window_height = 800
-sprite_scale = 1.0
+sprite_scale = 0.5
 
 [background]
 background_image = "assets/images/background.png"
@@ -25,9 +25,12 @@ title = "Base Attackers"
 
 [ship]
 accel = 400.0
-friction = 0.85
+friction = 0.25
 max_speed_x = 350.0
 max_speed_y = 300.0
+hp = 3
+hit_radius = 16.0
+gravity = 0
 
 [terrain]
 chunk_width = 64
@@ -40,3 +43,5 @@ terrain_amplitude = 80.0
 terrain_frequency = 0.008
 terrain_half_width = 280.0
 ceiling_present = false
+terrain_renderer = "polygon"
+terrain_seed = 0

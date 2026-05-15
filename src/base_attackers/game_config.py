@@ -1,6 +1,8 @@
 """Game configuration — extends agf BaseGameConfig."""
+
 from __future__ import annotations
 
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,9 +20,44 @@ class UIConfig:
 
 
 @dataclass
+class ShipSettings:
+    accel: float = 400.0
+    friction: float = 0.85
+    max_speed_x: float = 350.0
+    max_speed_y: float = 300.0
+    hp: int = 3
+    hit_radius: float = 16.0
+    gravity: float = 0.0  # px/s² toward the world floor; 0 disables
+
+
+@dataclass
+class TerrainSettings:
+    chunk_width: int = 64
+    cull_buffer_chunks: int = 3
+
+
+@dataclass
+class LevelSettings:
+    world_width: float = 6400.0
+    world_height: float = 720.0
+    terrain_amplitude: float = 80.0
+    terrain_frequency: float = 0.008
+    terrain_half_width: float = 280.0
+    ceiling_present: bool = False
+    terrain_renderer: str = "tile"  # "tile" | "polygon"
+    terrain_seed: int = 0  # 0 means random per run
+
+
+_LEVEL_SECTION_RE = re.compile(r"^level_(\d+)$")
+
+
+@dataclass
 class GameConfig(BaseGameConfig):
     background: BackgroundConfig = field(default_factory=BackgroundConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+    ship: ShipSettings = field(default_factory=ShipSettings)
+    terrain: TerrainSettings = field(default_factory=TerrainSettings)
+    levels: dict[int, LevelSettings] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "GameConfig":
@@ -35,6 +72,8 @@ class GameConfig(BaseGameConfig):
         game = data.get("game", {})
         bg_raw = data.get("background", {})
         ui_raw = data.get("ui", {})
+        ship_raw = data.get("ship", {})
+        terrain_raw = data.get("terrain", {})
 
         bg = BackgroundConfig(
             background_image=str(
@@ -54,6 +93,53 @@ class GameConfig(BaseGameConfig):
                 ui_raw.get("popup_rise_speed", UIConfig.popup_rise_speed)
             ),
         )
+        ship = ShipSettings(
+            accel=float(ship_raw.get("accel", ShipSettings.accel)),
+            friction=float(ship_raw.get("friction", ShipSettings.friction)),
+            max_speed_x=float(ship_raw.get("max_speed_x", ShipSettings.max_speed_x)),
+            max_speed_y=float(ship_raw.get("max_speed_y", ShipSettings.max_speed_y)),
+            hp=int(ship_raw.get("hp", ShipSettings.hp)),
+            hit_radius=float(ship_raw.get("hit_radius", ShipSettings.hit_radius)),
+            gravity=float(ship_raw.get("gravity", ShipSettings.gravity)),
+        )
+        terrain = TerrainSettings(
+            chunk_width=int(
+                terrain_raw.get("chunk_width", TerrainSettings.chunk_width)
+            ),
+            cull_buffer_chunks=int(
+                terrain_raw.get(
+                    "cull_buffer_chunks", TerrainSettings.cull_buffer_chunks
+                )
+            ),
+        )
+
+        levels: dict[int, LevelSettings] = {}
+        for key, raw in data.items():
+            m = _LEVEL_SECTION_RE.match(key)
+            if not m or not isinstance(raw, dict):
+                continue
+            n = int(m.group(1))
+            levels[n] = LevelSettings(
+                world_width=float(raw.get("world_width", LevelSettings.world_width)),
+                world_height=float(raw.get("world_height", LevelSettings.world_height)),
+                terrain_amplitude=float(
+                    raw.get("terrain_amplitude", LevelSettings.terrain_amplitude)
+                ),
+                terrain_frequency=float(
+                    raw.get("terrain_frequency", LevelSettings.terrain_frequency)
+                ),
+                terrain_half_width=float(
+                    raw.get("terrain_half_width", LevelSettings.terrain_half_width)
+                ),
+                ceiling_present=bool(
+                    raw.get("ceiling_present", LevelSettings.ceiling_present)
+                ),
+                terrain_renderer=str(
+                    raw.get("terrain_renderer", LevelSettings.terrain_renderer)
+                ),
+                terrain_seed=int(raw.get("terrain_seed", LevelSettings.terrain_seed)),
+            )
+
         return cls(
             starting_level=int(game.get("starting_level", cls.starting_level)),
             num_lives=int(game.get("num_lives", cls.num_lives)),
@@ -61,12 +147,13 @@ class GameConfig(BaseGameConfig):
             effects_volume=int(game.get("effects_volume", cls.effects_volume)),
             debug=bool(game.get("debug", cls.debug)),
             god_mode=bool(game.get("god_mode", cls.god_mode)),
-            max_window_height=int(
-                game.get("max_window_height", cls.max_window_height)
-            ),
+            max_window_height=int(game.get("max_window_height", cls.max_window_height)),
             sprite_scale=float(game.get("sprite_scale", cls.sprite_scale)),
             background=bg,
             ui=ui,
+            ship=ship,
+            terrain=terrain,
+            levels=levels,
         )
 
     def save(self, path: Optional[Path] = None) -> None:

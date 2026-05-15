@@ -10,15 +10,14 @@ main menu.
 from __future__ import annotations
 
 import random
-import tomllib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import arcade
 from pyglet.math import Vec2
 
-from agf.paths import writable_root
 from agf.ui.text_utils import FONT_THIN
+from src.base_attackers.game_config import GameConfig, LevelSettings
 from src.base_attackers.terrain import (
     PolygonTerrainRenderer,
     TerrainBase,
@@ -34,7 +33,6 @@ if TYPE_CHECKING:
 _SCROLL_SPEED = 600.0  # px/sec
 _OVERLAY_COLOR = arcade.color.WHITE
 _OVERLAY_FONT_SIZE = 14
-_CONFIG_LOAD_ERRORS = (FileNotFoundError, tomllib.TOMLDecodeError, RuntimeError)
 
 
 @dataclass(frozen=True)
@@ -55,30 +53,21 @@ _PRESETS: dict[int, _Preset] = {
 
 
 def _load_base_terrain_config() -> TerrainConfig:
-    """Parse [terrain] and [level_1] from game_config.toml into a TerrainConfig.
+    """Build the base TerrainConfig from GameConfig (terrain + level 1).
 
-    Preset overrides are applied on top of this base in _build().  Falls
-    back to the brief's defaults if the file is missing or contains
-    malformed entries (GameConfig.load() has the same swallow-and-default
-    behavior).
+    Preset overrides are applied on top of this base in _build().
     """
-    try:
-        path = writable_root() / "game_config.toml"
-        with open(path, "rb") as fh:
-            data = tomllib.load(fh)
-    except _CONFIG_LOAD_ERRORS:
-        data = {}
-    terrain = data.get("terrain", {})
-    level1 = data.get("level_1", {})
+    cfg = GameConfig.load()
+    lvl: LevelSettings = cfg.levels.get(1, LevelSettings())
     return TerrainConfig(
-        world_width=float(level1.get("world_width", 6400.0)),
-        world_height=float(level1.get("world_height", 720.0)),
-        chunk_width=int(terrain.get("chunk_width", 64)),
-        cull_buffer_chunks=int(terrain.get("cull_buffer_chunks", 3)),
-        amplitude=float(level1.get("terrain_amplitude", 80.0)),
-        frequency=float(level1.get("terrain_frequency", 0.008)),
-        half_width=float(level1.get("terrain_half_width", 280.0)),
-        ceiling_present=bool(level1.get("ceiling_present", False)),
+        world_width=lvl.world_width,
+        world_height=lvl.world_height,
+        chunk_width=cfg.terrain.chunk_width,
+        cull_buffer_chunks=cfg.terrain.cull_buffer_chunks,
+        amplitude=lvl.terrain_amplitude,
+        frequency=lvl.terrain_frequency,
+        half_width=lvl.terrain_half_width,
+        ceiling_present=lvl.ceiling_present,
     )
 
 

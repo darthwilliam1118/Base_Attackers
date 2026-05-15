@@ -12,8 +12,10 @@
 ## Framework dependency
 agf (arcade-game-framework) is installed as a dependency.
 Source: https://github.com/darthwilliam1118/arcade-game-framework
-Version: da37339 (pre-v0.3.0 — will be tagged once Base Attackers agf
-additions are stable)
+Version: 1e89589 (pre-v0.3.0 — will be tagged once Base Attackers agf
+additions are stable). Bump the SHA in `pyproject.toml` and
+`pip install -e ".[dev]" --force-reinstall --no-deps "arcade-game-framework @ git+…@<sha>"`
+whenever agf gains a new piece this game depends on.
 Import as: from agf.paths import resource_path
 
 Do NOT re-implement anything already in agf. Check agf source first.
@@ -41,6 +43,9 @@ It is more authoritative than this file on those topics.
 - agf.state                      — BaseGameStateManager (subclassed in state.py)
 - agf.window                     — GameWindowBase → ScrollingGameWindow
                                    (subclassed in game.py)
+- agf.ships.momentum             — MomentumShipMixin, MomentumConfig
+                                   (NOT re-exported at the agf top level —
+                                   import the submodule explicitly)
 
 ## Dual-camera system (Base Attackers specific)
 Base Attackers uses ScrollingGameWindow from agf, which provides two cameras:
@@ -58,6 +63,30 @@ Always structure on_draw() as:
 
 Never draw HUD elements in world camera context — they will scroll away.
 Never draw world objects in gui camera context — they will not scroll.
+
+### Camera tracking (RunLevelView)
+- Deadzone constants live in `views/run_level.py`:
+    _DEADZONE_LEFT = 0.25, _DEADZONE_RIGHT = 0.65
+    _DEADZONE_TOP  = 0.80, _DEADZONE_BOTTOM = 0.20
+- Monotonic X clamp via `self._min_camera_left`. Each frame:
+    cam_left = max(cam_left_from_deadzone, self._min_camera_left)
+    cam_left = min(cam_left, max(0, world_width - sw))   # right edge stop
+    self._min_camera_left = cam_left
+  The right-edge clamp parks the camera once the world's right edge meets
+  the screen's right edge. The monotonic floor means the camera never
+  scrolls left, regardless of which direction the ship moves.
+- Vertical clamp is `cam_bottom ∈ [0, max(0, world_h - sh)]`. While
+  `world_height <= window_height` (Phase 2's level 1: 720 ≤ 800), the
+  bound degenerates to 0 and the camera doesn't scroll vertically. It
+  re-enables itself once a level has `world_height > window_height`.
+
+### HUD mask
+The future HUD lives in the band above the world ceiling. To keep the
+tile renderer's ceiling overstack hidden, `RunLevelView` draws a black
+`arcade.draw_lrbt_rectangle_filled` in GUI-camera space from
+`hud_bottom = world_height - cam_bottom` up to the window top, BEFORE
+drawing any HUD text. The bound is computed each frame because
+`cam_bottom` varies once vertical scrolling kicks in.
 
 ## Where to add game logic
 - src/base_attackers/terrain/    — TerrainBase subclasses
@@ -205,11 +234,12 @@ the 3.x API. Key breaking changes:
 ### Camera (Arcade 3.x)
 - Use `arcade.Camera2D` for both world and GUI cameras
 - Call `camera.use()` to activate (or use ScrollingGameWindow helpers)
-- World camera X must only ever increase — enforce with:
-    self.world_camera.position = Vec2(
-        max(self.world_camera.position.x, new_x),
-        new_y
-    )
+- World camera X must only ever increase — see the "Camera tracking
+  (RunLevelView)" section above for the full deadzone + monotonic-floor
+  + right-edge-stop pattern used in this game. Don't enforce monotonic
+  X by hand on the camera property — use `_min_camera_left` so the
+  invariant survives a frame where the deadzone math wants to scroll
+  left.
 
 ### Window and View
 - `self.window.show_view(view)` — unchanged
@@ -234,6 +264,65 @@ the 3.x API. Key breaking changes:
 
 ---
 
+## Ship physics (Base Attackers specific)
+
+`PlayerShip` (`src/base_attackers/ships/player_ship.py`) inherits both
+`arcade.Sprite` (rendering) and `agf.ships.momentum.MomentumShipMixin`
+(physics). Import the mixin from `agf.ships.momentum` — it's not
+re-exported at the agf top level.
+
+### Update flow
+- `PlayerShip.update_ship(delta_time)` returns `(dx, dy)` — the position
+  delta for this frame. **It does NOT mutate `center_x` / `center_y`.**
+  `RunLevelView._update_ship` applies the delta only after clamping
+  against window/world bounds and running terrain collision, so a
+  contact frame never has the ship inside terrain.
+- Set `input_x` / `input_y` to -1.0, 0.0, or +1.0 before calling
+  `update_ship`. Friction is exponential per-second decay
+  (`velocity *= friction ** delta_time`), so the same `friction` value
+  feels identical across frame rates.
+
+### Gravity
+Optional constant downward acceleration, configured via
+`[ship] gravity` (default 0). Applied in `PlayerShip.update_ship`
+**before** the momentum step so friction damps it to a stable
+terminal velocity; setting `gravity = 0` disables it entirely.
+
+### Hitbox
+The player texture is loaded with
+`hit_box_algorithm=arcade.hitbox.algo_detailed` so collision tests
+against the actual ship silhouette (17 vertices for `playerShip1.png`).
+Use `algo_detailed` for any sprite where collision accuracy matters and
+the sprite is large enough that bbox cost is irrelevant. Bullets and
+similar small/fast sprites continue to use `algo_simple` (see
+"Collision detection performance" below).
+
+`PlayerShip.collides_with_terrain(terrain, at_x, at_y)` iterates the
+texture-local hitbox vertices, translates them to `(at_x, at_y)`, and
+calls `terrain.point_in_terrain` on each. Vertex sampling is sufficient
+because the corridor profile is piecewise-constant per `chunk_width`
+while detailed-algo vertices are ~1 px apart. Note: raw points assume
+`angle = 0` and `scale = 1`; if either changes, use
+`hit_box.get_adjusted_points()` instead.
+
+### Ship boundaries (enforced in RunLevelView._update_ship)
+- Left:   `cam_left + chunk_width`         — `velocity_x = 0` on contact
+- Right:  `world_width - chunk_width`      — `velocity_x = 0` on contact
+- Top:    `world_height - ship.height/2`   — `velocity_y = 0` on contact
+- Bottom: `ship.height/2`                  — `velocity_y = 0` on contact
+
+These supersede the brief's `cam_left + sw * _DEADZONE_LEFT` ship-left
+clamp — the deadzone still drives the camera, but the ship is allowed
+to drift to ~1 chunk_width of the window's left edge before stopping.
+
+### Terrain contact = instant death
+On collision, `RunLevelView` sets `ship.hp = 0` and transitions directly
+to `GameState.GAME_OVER`. There is no HP reduction or invincibility
+window in Phase 2. Phase 3 will swap this for an explosion animation +
+lives bookkeeping.
+
+---
+
 ## Terrain system (Base Attackers specific)
 - Terrain is generated once at level start for the entire world width —
   not streamed on the fly
@@ -245,6 +334,14 @@ the 3.x API. Key breaking changes:
   camera scrolls; the full profile is always in memory
 - Tile renderer uses SpriteList with spatial_hash=True (tiles never move)
 - Polygon renderer uses immediate-mode draw calls — NOT ShapeElementList
+- **Tile renderer overrides `floor_y_at`** to return the *visible* tile
+  top (`ceil(raw_floor_y / chunk_width) * chunk_width`) rather than the
+  raw corridor profile value. This keeps `point_in_terrain` aligned
+  with what's actually drawn so the ship can't sink into a tile by up
+  to `chunk_width - 1` px before dying. The polygon renderer uses the
+  raw `floor_y` from the base class because its trapezoids reach
+  exactly to that value. Ceiling tiles already bottom out at
+  `ceiling_y` exactly, so `ceiling_y_at` doesn't need an override.
 - See docs/architecture-overview.md for full terrain design
 
 ---
@@ -273,6 +370,44 @@ the 3.x API. Key breaking changes:
 - Use `hit_box_algorithm=arcade.hitbox.algo_simple` for bullets —
   pixel-perfect hitboxes add cost with no gameplay benefit for small
   fast projectiles
+- Use `arcade.hitbox.algo_detailed` for the player ship and any sprite
+  where wing/nose contact should count, not just centre-pixel overlap.
+  `PlayerShip` loads its texture with this algorithm — see "Ship
+  physics" above.
+
+---
+
+## Configuration (Base Attackers specific)
+
+`GameConfig.load()` parses `game_config.toml` into a `GameConfig`
+dataclass with three nested settings groups and a per-level map:
+
+- `cfg.ship` — `ShipSettings`. Fields: `accel`, `friction` (per-second
+  decay multiplier), `max_speed_x`, `max_speed_y`, `hp`, `hit_radius`,
+  `gravity`. Maps to `[ship]` in the TOML.
+- `cfg.terrain` — `TerrainSettings`. Fields: `chunk_width`,
+  `cull_buffer_chunks`. Maps to `[terrain]`.
+- `cfg.levels` — `dict[int, LevelSettings]`. One entry per
+  `[level_N]` section in the TOML (regex `^level_(\d+)$`). Each
+  `LevelSettings` has `world_width`, `world_height`, terrain wave
+  params, `ceiling_present`, `terrain_renderer` (`"tile"` or
+  `"polygon"`), and `terrain_seed`.
+
+### Renderer & seed per level
+- `[level_N] terrain_renderer = "tile"` or `"polygon"` picks the
+  visual style for that level — set per level for variety (natural
+  rock vs artificial structure).
+- `[level_N] terrain_seed = 0` means "pick a random seed at run start"
+  — the level shape changes each playthrough. Any non-zero value is
+  passed verbatim to `generate_corridor_profile`, producing a
+  reproducible profile across runs (useful for bug repro and for
+  hand-tuned levels).
+
+Anything that needs config should pull from `GameConfig.load()` (or
+`manager.context.get("config")` when the state machine populated it).
+Don't re-parse TOML in views — `TerrainTestView` was refactored in
+Phase 2 to read `cfg.terrain` + `cfg.levels[1]` exactly like
+`RunLevelView` does.
 
 ---
 
@@ -305,8 +440,8 @@ the 3.x API. Key breaking changes:
 - agf package needs no special handling in spec — bundled automatically
 
 ## Feature brief index
-- Phase 1 — Terrain testbed:      docs/features/phase-1-terrain-testbed.md
-- Phase 2 — Ship in the world:    docs/features/phase-2-ship.md (TBD)
+- Phase 1 — Terrain testbed:      docs/features/phase-1-terrain-testbed.md (done)
+- Phase 2 — Ship in the world:    docs/features/phase-2-ship.md (done)
 - Phase 3 — Fuel system:          docs/features/phase-3-fuel.md (TBD)
 - Phase 4 — Weapons and enemies:  docs/features/phase-4-combat.md (TBD)
 - Phase 5 — Power-ups:            docs/features/phase-5-powerups.md (TBD)

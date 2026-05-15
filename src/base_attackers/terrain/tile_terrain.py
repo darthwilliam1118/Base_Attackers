@@ -11,6 +11,8 @@ decision.
 
 from __future__ import annotations
 
+import math
+
 import arcade
 from PIL import Image
 
@@ -41,6 +43,25 @@ class TileTerrainRenderer(TerrainBase):
         self._tile_texture = _build_tile_texture(config.chunk_width)
         self._sprites = arcade.SpriteList(use_spatial_hash=True)
         self._active_columns: dict[int, list[arcade.Sprite]] = {}
+
+    # ---- collision -------------------------------------------------
+
+    def floor_y_at(self, world_x: float) -> float:
+        """Return the *rendered* floor height — the top of the highest
+        floor tile at this column.  Floor tiles stack from y=0 upward
+        in chunk_width-tall steps, so the visible surface sits at
+        ``ceil(raw_floor_y / cw) * cw`` rather than at the raw profile
+        value.  Using this for collision keeps the ship from sinking
+        into a visible tile before being killed.
+        """
+        raw = super().floor_y_at(world_x)
+        if raw <= 0.0:
+            return 0.0
+        cw = self.config.chunk_width
+        return math.ceil(raw / cw) * cw
+
+    # (ceiling_y_at uses the base class — ceiling tiles' bottom is
+    # exactly ceiling_y, so the raw value already matches the render.)
 
     # ---- public API ------------------------------------------------
 

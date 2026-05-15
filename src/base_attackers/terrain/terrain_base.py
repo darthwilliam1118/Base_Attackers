@@ -69,12 +69,9 @@ def generate_corridor_profile(
     profile: list[CorridorSlice] = []
     for i in range(n):
         x = i * cw
-        # Ramp amplitude: wide at entry and at boss zone, full in the middle.
-        # "1 - smoothstep" near the edges, 0 in the middle -> use 1 - that.
-        edge_factor = 1.0 - max(
-            1.0 - _smoothstep(0.0, 0.10 * W, x),
-            _smoothstep(0.90 * W, W, x),
-        )
+        # Boss-zone widening: corridor opens up over the last 10% of the
+        # world (no entry ramp — terrain starts at full amplitude at x=0).
+        edge_factor = 1.0 - _smoothstep(0.90 * W, W, x)
         running_amp = config.amplitude * edge_factor
         running_half = config.half_width + (1.0 - edge_factor) * 80.0
 

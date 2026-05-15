@@ -20,16 +20,16 @@ class MainMenuView(_AGFMainMenu):
         return "ending"
 
     def on_start_1p(self) -> None:
-        # Phase 1: route to terrain testbed instead of GAME_INIT.
         from src.base_attackers.state import GameState
 
-        self._manager.transition(GameState.TERRAIN_TEST)
+        cfg = self._manager.context.get("config")
+        self._manager.transition(GameState.GAME_INIT, num_players=1, config=cfg)
 
     def on_start_2p(self) -> None:
-        # Phase 1: route to terrain testbed instead of GAME_INIT.
         from src.base_attackers.state import GameState
 
-        self._manager.transition(GameState.TERRAIN_TEST)
+        cfg = self._manager.context.get("config")
+        self._manager.transition(GameState.GAME_INIT, num_players=2, config=cfg)
 
     def on_config(self) -> None:
         pass  # add a config view when ready
