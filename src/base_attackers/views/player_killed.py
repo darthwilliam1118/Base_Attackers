@@ -2,6 +2,7 @@
 
 No agf base class — self-contained implementation.
 """
+
 from __future__ import annotations
 
 import math
@@ -27,7 +28,8 @@ class PlayerKilledView(arcade.View):
         w, h = self.window.width, self.window.height
         self._label = centered_text(
             "SHIP DESTROYED",
-            w, h // 2,
+            w,
+            h // 2,
             font_size=36,
             color=arcade.color.RED,
             font_name=FONT_THIN,
@@ -53,6 +55,7 @@ class PlayerKilledView(arcade.View):
 
     def _advance(self) -> None:
         from src.base_attackers.state import GameState
+
         players = self._manager.context.get("players", [])
         idx = self._manager.context.get("active_player_index", 0)
         if players:

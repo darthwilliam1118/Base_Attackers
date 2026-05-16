@@ -28,7 +28,14 @@
       "Bash(black src/base_attackers/game_config.py src/base_attackers/ships/ src/base_attackers/views/run_level.py src/base_attackers/views/terrain_test.py src/base_attackers/views/main_menu.py)",
       "Bash(black --check src/base_attackers/ships/player_ship.py src/base_attackers/views/run_level.py)",
       "Bash(black --check src/base_attackers/terrain/ src/base_attackers/views/run_level.py)",
-      "Bash(black --check src/base_attackers/terrain/)"
+      "Bash(black --check src/base_attackers/terrain/)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\darth\\\\Code\\\\Base_Attackers\\\\assets\\\\images\\\\PNG\\\\Parts\" -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object Name, Length)",
+      "Bash(Format-Table -AutoSize)",
+      "Bash(black --check src/base_attackers/game_config.py src/base_attackers/ships/ src/base_attackers/terrain_features/ src/base_attackers/views/run_level.py)",
+      "Bash(black src/base_attackers/game_config.py src/base_attackers/ships/ src/base_attackers/terrain_features/ src/base_attackers/views/run_level.py)",
+      "Bash(black --check .)",
+      "Bash(black .)"
     ]
   }
 }

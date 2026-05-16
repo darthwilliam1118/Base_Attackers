@@ -1,4 +1,5 @@
 """Splash screen for Base Attackers."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -27,4 +28,5 @@ class SplashView(_AGFSplash):
 
     def _go_to_main(self) -> None:
         from src.base_attackers.state import GameState
+
         self._manager.transition(GameState.MAIN)

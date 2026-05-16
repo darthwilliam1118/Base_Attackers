@@ -1,4 +1,5 @@
 """LevelCompleteView."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -27,6 +28,7 @@ class LevelCompleteView(_AGFLevelComplete):
 
     def _on_complete(self) -> None:
         from src.base_attackers.state import GameState
+
         players = self._manager.context.get("players", [])
         idx = self._manager.context.get("active_player_index", 0)
         if players:

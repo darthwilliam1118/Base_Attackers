@@ -1,4 +1,5 @@
 """Main game window for Base Attackers."""
+
 from __future__ import annotations
 
 import arcade
@@ -41,12 +42,14 @@ class GameWindow(ScrollingGameWindow):
         arcade.load_font(resource_path("assets/fonts/kenvector_future_thin2.ttf"))
 
         import agf.ui.text_utils as _tu
+
         _tu.FONT_MAIN = GAME_FONT
         _tu.FONT_THIN = GAME_FONT
 
         # Modules that did `from agf.ui.text_utils import FONT_MAIN` cached
         # the name locally — rebind those too.
         import importlib
+
         for mod_name in (
             "agf.views.splash",
             "agf.views.main_menu",

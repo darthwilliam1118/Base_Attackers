@@ -1,4 +1,5 @@
 """GameOverView."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -19,4 +20,5 @@ class GameOverView(_AGFGameOver):
 
     def _on_complete(self) -> None:
         from src.base_attackers.state import GameState
+
         self._manager.transition(GameState.SCORE_ENTRY)

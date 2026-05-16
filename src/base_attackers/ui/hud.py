@@ -1,4 +1,5 @@
 """HUD for Base Attackers."""
+
 from __future__ import annotations
 
 from typing import Optional
@@ -9,8 +10,7 @@ from agf.ui.text_utils import FONT_THIN
 
 class HUD(HUDBase):
 
-    def __init__(self, window_width: int, window_height: int,
-                 num_players: int = 1):
+    def __init__(self, window_width: int, window_height: int, num_players: int = 1):
         super().__init__(window_width, window_height)
         self._num_players = num_players
         self._score_text: Optional[arcade.Text] = None
@@ -25,25 +25,36 @@ class HUD(HUDBase):
         w, h = self.window_width, self.window_height
         y = h - 24
         self._score_text = arcade.Text(
-            "SCORE: 0", 16, y,
-            arcade.color.WHITE, 16,
-            font_name=FONT_THIN, anchor_y="center",
+            "SCORE: 0",
+            16,
+            y,
+            arcade.color.WHITE,
+            16,
+            font_name=FONT_THIN,
+            anchor_y="center",
         )
         self._lives_text = arcade.Text(
-            "LIVES: 3", w - 16, y,
-            arcade.color.WHITE, 16,
+            "LIVES: 3",
+            w - 16,
+            y,
+            arcade.color.WHITE,
+            16,
             font_name=FONT_THIN,
-            anchor_x="right", anchor_y="center",
+            anchor_x="right",
+            anchor_y="center",
         )
         self._level_text = arcade.Text(
-            "LEVEL: 1", w / 2, y,
-            arcade.color.WHITE, 16,
+            "LEVEL: 1",
+            w / 2,
+            y,
+            arcade.color.WHITE,
+            16,
             font_name=FONT_THIN,
-            anchor_x="center", anchor_y="center",
+            anchor_x="center",
+            anchor_y="center",
         )
 
-    def update(self, players: list, active_idx: int,
-               level: int) -> None:
+    def update(self, players: list, active_idx: int, level: int) -> None:
         if not players:
             return
         p = players[active_idx]

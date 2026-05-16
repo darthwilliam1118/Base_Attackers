@@ -1,4 +1,5 @@
 """ScoreEntryView."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -16,6 +17,7 @@ class ScoreEntryView(_AGFScoreEntry):
 
     def get_high_score_table(self):
         from agf.high_scores import HighScoreTable, scores_path
+
         return HighScoreTable.load(scores_path())
 
     def get_all_players(self):
@@ -23,4 +25,5 @@ class ScoreEntryView(_AGFScoreEntry):
 
     def _on_complete(self) -> None:
         from src.base_attackers.state import GameState
+
         self._manager.transition(GameState.MAIN)

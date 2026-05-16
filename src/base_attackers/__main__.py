@@ -1,4 +1,5 @@
 """Allow running as python -m base_attackers."""
+
 import sys
 from pathlib import Path
 

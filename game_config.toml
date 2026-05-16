@@ -31,6 +31,16 @@ max_speed_y = 300.0
 hp = 3
 hit_radius = 16.0
 gravity = 0
+fuel_capacity = 100.0
+fuel_drain_rate = 4.0
+fuel_gravity = 150.0
+fuel_canister_restore = 25.0
+
+[fuel_tower]
+transfer_rate = 20.0
+snap_distance = 40.0
+tower_capacity = 60.0
+spawn_pressure_interval = 3.0
 
 [terrain]
 chunk_width = 64

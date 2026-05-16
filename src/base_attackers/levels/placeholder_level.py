@@ -3,6 +3,7 @@
 Replace this file with your game's level implementation.
 See agf.levels.base_level.BaseLevel for the full interface.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -42,8 +43,7 @@ class PlaceholderLevel(BaseLevel):
     def setup(self, level_number: int) -> None:
         pass
 
-    def update(self, delta_time: float,
-               player_ship: Any) -> list[GameEvent]:
+    def update(self, delta_time: float, player_ship: Any) -> list[GameEvent]:
         return []
 
     def draw(self) -> None:
@@ -74,7 +74,7 @@ class PlaceholderLevel(BaseLevel):
         return {"level_type": "placeholder"}
 
     @classmethod
-    def from_snapshot(cls, snapshot: dict, config: Any,
-                      window_width: int,
-                      window_height: int) -> "PlaceholderLevel":
+    def from_snapshot(
+        cls, snapshot: dict, config: Any, window_width: int, window_height: int
+    ) -> "PlaceholderLevel":
         return cls(window_width, window_height)

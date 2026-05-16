@@ -1,4 +1,5 @@
 """Entry point for Base Attackers."""
+
 import sys
 from pathlib import Path
 

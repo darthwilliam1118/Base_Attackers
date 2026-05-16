@@ -28,6 +28,19 @@ class ShipSettings:
     hp: int = 3
     hit_radius: float = 16.0
     gravity: float = 0.0  # px/s² toward the world floor; 0 disables
+    # Fuel
+    fuel_capacity: float = 100.0
+    fuel_drain_rate: float = 4.0
+    fuel_gravity: float = 150.0  # px/s² downward when fuel is empty
+    fuel_canister_restore: float = 25.0
+
+
+@dataclass
+class FuelTowerSettings:
+    transfer_rate: float = 20.0
+    snap_distance: float = 40.0
+    tower_capacity: float = 60.0
+    spawn_pressure_interval: float = 3.0
 
 
 @dataclass
@@ -56,6 +69,7 @@ class GameConfig(BaseGameConfig):
     background: BackgroundConfig = field(default_factory=BackgroundConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     ship: ShipSettings = field(default_factory=ShipSettings)
+    fuel_tower: FuelTowerSettings = field(default_factory=FuelTowerSettings)
     terrain: TerrainSettings = field(default_factory=TerrainSettings)
     levels: dict[int, LevelSettings] = field(default_factory=dict)
 
@@ -73,6 +87,7 @@ class GameConfig(BaseGameConfig):
         bg_raw = data.get("background", {})
         ui_raw = data.get("ui", {})
         ship_raw = data.get("ship", {})
+        fuel_tower_raw = data.get("fuel_tower", {})
         terrain_raw = data.get("terrain", {})
 
         bg = BackgroundConfig(
@@ -101,6 +116,35 @@ class GameConfig(BaseGameConfig):
             hp=int(ship_raw.get("hp", ShipSettings.hp)),
             hit_radius=float(ship_raw.get("hit_radius", ShipSettings.hit_radius)),
             gravity=float(ship_raw.get("gravity", ShipSettings.gravity)),
+            fuel_capacity=float(
+                ship_raw.get("fuel_capacity", ShipSettings.fuel_capacity)
+            ),
+            fuel_drain_rate=float(
+                ship_raw.get("fuel_drain_rate", ShipSettings.fuel_drain_rate)
+            ),
+            fuel_gravity=float(ship_raw.get("fuel_gravity", ShipSettings.fuel_gravity)),
+            fuel_canister_restore=float(
+                ship_raw.get(
+                    "fuel_canister_restore", ShipSettings.fuel_canister_restore
+                )
+            ),
+        )
+        fuel_tower = FuelTowerSettings(
+            transfer_rate=float(
+                fuel_tower_raw.get("transfer_rate", FuelTowerSettings.transfer_rate)
+            ),
+            snap_distance=float(
+                fuel_tower_raw.get("snap_distance", FuelTowerSettings.snap_distance)
+            ),
+            tower_capacity=float(
+                fuel_tower_raw.get("tower_capacity", FuelTowerSettings.tower_capacity)
+            ),
+            spawn_pressure_interval=float(
+                fuel_tower_raw.get(
+                    "spawn_pressure_interval",
+                    FuelTowerSettings.spawn_pressure_interval,
+                )
+            ),
         )
         terrain = TerrainSettings(
             chunk_width=int(
@@ -152,6 +196,7 @@ class GameConfig(BaseGameConfig):
             background=bg,
             ui=ui,
             ship=ship,
+            fuel_tower=fuel_tower,
             terrain=terrain,
             levels=levels,
         )
