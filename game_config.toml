@@ -42,6 +42,20 @@ snap_distance = 40.0
 tower_capacity = 60.0
 spawn_pressure_interval = 3.0
 
+[combat]
+player_bullet_speed = 600.0
+player_fire_cooldown = 0.25
+player_bullet_damage = 1
+enemy_bullet_speed = 250.0
+missile_speed = 200.0
+missile_proximity_trigger = 180.0
+turret_fire_cooldown = 2.0
+turret_aim_jitter = 0.15
+turret_rotation_speed = 90.0
+silo_hp = 2
+turret_hp = 3
+bullet_cull_margin = 64.0
+
 [terrain]
 chunk_width = 64
 cull_buffer_chunks = 3
