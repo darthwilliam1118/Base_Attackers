@@ -40,7 +40,8 @@
       "Bash(python -c \"from agf.config.base_config import BaseGameConfig; import inspect; print\\('=== BaseGameConfig fields ==='\\); print\\(inspect.signature\\(BaseGameConfig.__init__\\)\\)\")",
       "Bash(python -c \"from agf.sound_manager import SoundManager; help\\(SoundManager.play\\)\")",
       "Bash(python -c \"from agf.sound_manager import SoundManager; print\\([m for m in dir\\(SoundManager\\) if not m.startswith\\('_'\\)]\\)\")",
-      "Bash(python -c \"import arcade; s = arcade.Sprite\\(hit_box_algorithm=arcade.hitbox.algo_simple\\); print\\('hit_box_algorithm kwarg accepted'\\)\")"
+      "Bash(python -c \"import arcade; s = arcade.Sprite\\(hit_box_algorithm=arcade.hitbox.algo_simple\\); print\\('hit_box_algorithm kwarg accepted'\\)\")",
+      "Bash(python -c \"import PyInstaller; print\\('PyInstaller', PyInstaller.__version__\\)\")"
     ]
   }
 }
