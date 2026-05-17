@@ -14,6 +14,7 @@ dev = [
     "ruff",
     "black",
     "cookiecutter",
+    "pyinstaller>=6.10",
 ]
 
 [tool.pytest.ini_options]
