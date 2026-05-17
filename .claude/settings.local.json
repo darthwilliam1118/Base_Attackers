@@ -35,7 +35,12 @@
       "Bash(black --check src/base_attackers/game_config.py src/base_attackers/ships/ src/base_attackers/terrain_features/ src/base_attackers/views/run_level.py)",
       "Bash(black src/base_attackers/game_config.py src/base_attackers/ships/ src/base_attackers/terrain_features/ src/base_attackers/views/run_level.py)",
       "Bash(black --check .)",
-      "Bash(black .)"
+      "Bash(black .)",
+      "Bash(python -c \"import arcade; import inspect; print\\('=== arcade.Sprite.__init__ signature ==='\\); print\\(inspect.signature\\(arcade.Sprite.__init__\\)\\)\")",
+      "Bash(python -c \"from agf.config.base_config import BaseGameConfig; import inspect; print\\('=== BaseGameConfig fields ==='\\); print\\(inspect.signature\\(BaseGameConfig.__init__\\)\\)\")",
+      "Bash(python -c \"from agf.sound_manager import SoundManager; help\\(SoundManager.play\\)\")",
+      "Bash(python -c \"from agf.sound_manager import SoundManager; print\\([m for m in dir\\(SoundManager\\) if not m.startswith\\('_'\\)]\\)\")",
+      "Bash(python -c \"import arcade; s = arcade.Sprite\\(hit_box_algorithm=arcade.hitbox.algo_simple\\); print\\('hit_box_algorithm kwarg accepted'\\)\")"
     ]
   }
 }

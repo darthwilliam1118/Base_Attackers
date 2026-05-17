@@ -44,6 +44,22 @@ class FuelTowerSettings:
 
 
 @dataclass
+class CombatSettings:
+    player_bullet_speed: float = 600.0
+    player_fire_cooldown: float = 0.25
+    player_bullet_damage: int = 1
+    enemy_bullet_speed: float = 250.0
+    missile_speed: float = 200.0
+    missile_proximity_trigger: float = 180.0
+    turret_fire_cooldown: float = 2.0
+    turret_aim_jitter: float = 0.15
+    turret_rotation_speed: float = 90.0
+    silo_hp: int = 2
+    turret_hp: int = 3
+    bullet_cull_margin: float = 64.0
+
+
+@dataclass
 class TerrainSettings:
     chunk_width: int = 64
     cull_buffer_chunks: int = 3
@@ -70,6 +86,7 @@ class GameConfig(BaseGameConfig):
     ui: UIConfig = field(default_factory=UIConfig)
     ship: ShipSettings = field(default_factory=ShipSettings)
     fuel_tower: FuelTowerSettings = field(default_factory=FuelTowerSettings)
+    combat: CombatSettings = field(default_factory=CombatSettings)
     terrain: TerrainSettings = field(default_factory=TerrainSettings)
     levels: dict[int, LevelSettings] = field(default_factory=dict)
 
@@ -88,6 +105,7 @@ class GameConfig(BaseGameConfig):
         ui_raw = data.get("ui", {})
         ship_raw = data.get("ship", {})
         fuel_tower_raw = data.get("fuel_tower", {})
+        combat_raw = data.get("combat", {})
         terrain_raw = data.get("terrain", {})
 
         bg = BackgroundConfig(
@@ -146,6 +164,53 @@ class GameConfig(BaseGameConfig):
                 )
             ),
         )
+        combat = CombatSettings(
+            player_bullet_speed=float(
+                combat_raw.get(
+                    "player_bullet_speed", CombatSettings.player_bullet_speed
+                )
+            ),
+            player_fire_cooldown=float(
+                combat_raw.get(
+                    "player_fire_cooldown", CombatSettings.player_fire_cooldown
+                )
+            ),
+            player_bullet_damage=int(
+                combat_raw.get(
+                    "player_bullet_damage", CombatSettings.player_bullet_damage
+                )
+            ),
+            enemy_bullet_speed=float(
+                combat_raw.get("enemy_bullet_speed", CombatSettings.enemy_bullet_speed)
+            ),
+            missile_speed=float(
+                combat_raw.get("missile_speed", CombatSettings.missile_speed)
+            ),
+            missile_proximity_trigger=float(
+                combat_raw.get(
+                    "missile_proximity_trigger",
+                    CombatSettings.missile_proximity_trigger,
+                )
+            ),
+            turret_fire_cooldown=float(
+                combat_raw.get(
+                    "turret_fire_cooldown", CombatSettings.turret_fire_cooldown
+                )
+            ),
+            turret_aim_jitter=float(
+                combat_raw.get("turret_aim_jitter", CombatSettings.turret_aim_jitter)
+            ),
+            turret_rotation_speed=float(
+                combat_raw.get(
+                    "turret_rotation_speed", CombatSettings.turret_rotation_speed
+                )
+            ),
+            silo_hp=int(combat_raw.get("silo_hp", CombatSettings.silo_hp)),
+            turret_hp=int(combat_raw.get("turret_hp", CombatSettings.turret_hp)),
+            bullet_cull_margin=float(
+                combat_raw.get("bullet_cull_margin", CombatSettings.bullet_cull_margin)
+            ),
+        )
         terrain = TerrainSettings(
             chunk_width=int(
                 terrain_raw.get("chunk_width", TerrainSettings.chunk_width)
@@ -197,6 +262,7 @@ class GameConfig(BaseGameConfig):
             ui=ui,
             ship=ship,
             fuel_tower=fuel_tower,
+            combat=combat,
             terrain=terrain,
             levels=levels,
         )

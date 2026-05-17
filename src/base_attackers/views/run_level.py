@@ -30,6 +30,7 @@ sequence fires.
 
 from __future__ import annotations
 
+import gc
 import logging
 from typing import TYPE_CHECKING
 
@@ -38,8 +39,11 @@ from pyglet.math import Vec2
 
 from agf.paths import resource_path
 from agf.ships.momentum import MomentumConfig
+from agf.sound_manager import SoundManager
 from agf.sprites.explosion import ExplosionSprite
 from agf.ui.text_utils import FONT_THIN
+from src.base_attackers.combat import EnemyBullet, Missile, PlayerBullet
+from src.base_attackers.enemies import GunTurret, MissileSilo
 from src.base_attackers.game_config import GameConfig, LevelSettings
 from src.base_attackers.ships import PlayerShip
 from src.base_attackers.terrain import (
@@ -68,6 +72,30 @@ _DEADZONE_BOTTOM = 0.20
 # Hardcoded for Phase 3 — Phase 7 moves these into level config.
 _PHASE3_TOWER_POSITIONS = [800.0, 2400.0, 4400.0]
 _PHASE3_CANISTER_POSITIONS = [1600.0, 3200.0, 5000.0]
+
+# Hardcoded for Phase 4 — Phase 7 moves these into level config.
+_PHASE4_SILO_POSITIONS: list[tuple[float, str]] = [
+    (1200.0, "floor"),
+    (2800.0, "floor"),
+    (4000.0, "floor"),
+]
+_PHASE4_TURRET_POSITIONS: list[tuple[float, str]] = [
+    (600.0, "floor"),
+    (1800.0, "floor"),
+    (3400.0, "floor"),
+    (5200.0, "floor"),
+]
+
+# SFX paths and SoundManager throttle limits.
+_SND_PLAYER_SHOOT = "assets/sounds/laserSmall_000.wav"
+_SND_ENEMY_SHOOT = "assets/sounds/laserLarge_000.wav"
+_SND_ENEMY_BOOM = "assets/sounds/explosionCrunch_000.wav"
+_SND_PLAYER_BOOM = "assets/sounds/explosionCrunch_004.wav"
+
+# Dock-pressure wave size.
+_PRESSURE_WAVE_COUNT = 3
+_PRESSURE_WAVE_Y_JITTER = 80.0
+_PRESSURE_WAVE_SPAWN_MARGIN = 50.0
 
 # Death sequence + dock indicator timings.
 _DEATH_DURATION = 1.5
@@ -153,6 +181,37 @@ class RunLevelView(arcade.View):
         self._towers: list[FuelTower] = []
         self._canister_list = arcade.SpriteList()
 
+        # Enemies + projectiles (populated in on_show_view).
+        self._silo_list = arcade.SpriteList()
+        self._silos: list[MissileSilo] = []
+        self._turret_base_list = arcade.SpriteList()
+        self._turret_barrel_list = arcade.SpriteList()
+        self._turrets: list[GunTurret] = []
+        self._bullet_list = arcade.SpriteList()  # player bullets
+        self._enemy_bullet_list = arcade.SpriteList()
+        self._missile_list = arcade.SpriteList()
+
+        # Combat state.
+        self._fire_cooldown: float = 0.0
+        self._collision_frame: int = 0
+        self._score: int = 0
+
+        # Sound: one arcade.Sound + one SoundManager per effect type
+        # (CLAUDE.md pattern).  Volume passed to play() as 0.0-1.0.
+        self._snd_player_shoot = arcade.Sound(resource_path(_SND_PLAYER_SHOOT))
+        self._snd_enemy_shoot = arcade.Sound(resource_path(_SND_ENEMY_SHOOT))
+        self._snd_enemy_boom = arcade.Sound(resource_path(_SND_ENEMY_BOOM))
+        self._snd_player_boom = arcade.Sound(resource_path(_SND_PLAYER_BOOM))
+        # Missile launches reuse the enemy-shoot sample but throttle
+        # independently so a flurry of missiles + turret shots don't
+        # starve each other.
+        self._snd_missile = self._snd_enemy_shoot
+        self._sm_player_shoot = SoundManager(max_simultaneous=3)
+        self._sm_enemy_shoot = SoundManager(max_simultaneous=3)
+        self._sm_missile = SoundManager(max_simultaneous=2)
+        self._sm_enemy_boom = SoundManager(max_simultaneous=4)
+        self._sm_player_boom = SoundManager(max_simultaneous=2)
+
         # Explosion + death timer.
         self._explosion_list = arcade.SpriteList()
         self._death_timer: float = 0.0
@@ -164,6 +223,11 @@ class RunLevelView(arcade.View):
         self._dock_blink_visible: bool = True
         self._dock_cooldown: float = 0.0
 
+        # Pause state (Space Attackers pattern — view-local, no GameState).
+        self._paused: bool = False
+        self._pause_overlay_list = arcade.SpriteList()
+        self._paused_text: arcade.Text | None = None
+
         # HUD (built lazily once window dims are known).
         self._hud_built: bool = False
         self._hud_fps: arcade.Text | None = None
@@ -171,6 +235,7 @@ class RunLevelView(arcade.View):
         self._hud_hp: arcade.Text | None = None
         self._hud_fuel_label: arcade.Text | None = None
         self._hud_docked: arcade.Text | None = None
+        self._hud_score: arcade.Text | None = None
 
     # ---- lifecycle -------------------------------------------------
 
@@ -186,6 +251,8 @@ class RunLevelView(arcade.View):
             self._terrain.update(0.0)
             self._place_fuel_towers()
             self._place_fuel_canisters()
+            self._place_missile_silos()
+            self._place_gun_turrets()
         if not self._hud_built:
             self._build_hud()
             self._hud_built = True
@@ -200,9 +267,20 @@ class RunLevelView(arcade.View):
         delta_time = min(delta_time, 1 / 15)
         self._last_delta = delta_time
 
+        # Pause freezes everything.  Run a gen-0 GC sweep each frame so
+        # orphaned GL buffer objects from any leftover draw allocations
+        # don't accumulate into a slow gen-2 collection when gameplay
+        # resumes (Space Attackers pattern).
+        if self._paused:
+            gc.collect(0)
+            return
+
         # Tick the post-undock dock-suspension cooldown.
         if self._dock_cooldown > 0.0:
             self._dock_cooldown = max(0.0, self._dock_cooldown - delta_time)
+        # Tick the player fire cooldown.
+        if self._fire_cooldown > 0.0:
+            self._fire_cooldown = max(0.0, self._fire_cooldown - delta_time)
 
         # Death sequence — play out the explosion before transitioning.
         if self._death_timer > 0.0:
@@ -235,7 +313,18 @@ class RunLevelView(arcade.View):
         self._check_docking()
         self._check_canister_pickup()
 
+        # Combat updates.
+        self._update_missiles(delta_time)
+        self._update_turrets(delta_time)
+        self._update_player_bullets(delta_time)
+        self._check_combat_collisions()
+        if self._death_timer > 0.0:
+            # Player died mid-frame; let the death-timer guard pick up
+            # next frame to play the explosion and transition.
+            return
+
         # Ship-state-driven visuals.
+        self._explosion_list.update(delta_time)
         self._ship.update_scratch_overlay()
         self._tick_dock_blink(delta_time)
 
@@ -248,20 +337,49 @@ class RunLevelView(arcade.View):
             self._terrain.draw()
         self._tower_list.draw()
         self._canister_list.draw()
+        self._silo_list.draw()
+        self._turret_base_list.draw()
+        self._turret_barrel_list.draw()  # barrels above bases
+        self._missile_list.draw()
+        self._enemy_bullet_list.draw()
+        self._bullet_list.draw()  # player bullets above enemy bullets
         self._ship_list.draw()
         self._scratch_list.draw()
-        self._explosion_list.draw()
+        self._explosion_list.draw()  # always on top
 
         self.window.use_gui_camera()
         self._draw_hud()
 
+        # Pause overlay on top of everything.
+        if self._paused:
+            self._pause_overlay_list.draw()
+            if self._paused_text is not None:
+                self._paused_text.draw()
+
     # ---- input -----------------------------------------------------
 
     def on_key_press(self, key: int, modifiers: int) -> None:
-        # SPACE undocks the ship if docked.  Phase 4 will reuse SPACE
-        # for firing — the is_docked check is the gate.
-        if key == arcade.key.SPACE and self._ship.is_docked:
-            self._undock_requested = True
+        # P toggles pause.  Pauses music on entry, resumes on exit, and
+        # runs a full GC sweep on entry so nothing accumulates during
+        # the freeze (Space Attackers pattern).
+        if key == arcade.key.P:
+            self._paused = not self._paused
+            if self._paused:
+                gc.collect()
+                self.window.music.pause()
+            else:
+                self.window.music.resume()
+            return
+        # While paused, swallow all other keypresses.
+        if self._paused:
+            return
+        # SPACE: undock if docked, otherwise fire a player bullet.
+        # The is_docked check is the gate — same key cannot do both.
+        if key == arcade.key.SPACE:
+            if self._ship.is_docked:
+                self._undock_requested = True
+            else:
+                self._try_fire()
         self._held_keys.add(key)
 
     def on_key_release(self, key: int, modifiers: int) -> None:
@@ -471,6 +589,53 @@ class RunLevelView(arcade.View):
             canister.center_y = self._terrain.floor_y_at(x) + 80.0
             self._canister_list.append(canister)
 
+    def _place_missile_silos(self) -> None:
+        """Construct each silo at a dummy y, then position using
+        ``silo.height`` once the texture has loaded (same safety
+        pattern as FuelTower).
+        """
+        assert self._terrain is not None
+        for x, surface in _PHASE4_SILO_POSITIONS:
+            silo = MissileSilo(
+                world_x=x,
+                surface=surface,
+                cfg=self._cfg.combat,
+                scale=self._cfg.sprite_scale,
+            )
+            if surface == "floor":
+                surface_y = self._terrain.floor_y_at(x)
+                silo.center_y = surface_y + silo.height / 2.0
+            else:
+                ceil_y = self._terrain.ceiling_y_at(x)
+                if ceil_y is None:
+                    continue  # no ceiling at this x — skip
+                silo.center_y = ceil_y - silo.height / 2.0
+            self._silo_list.append(silo)
+            self._silos.append(silo)
+
+    def _place_gun_turrets(self) -> None:
+        """Construct each turret, then position via the composite's
+        own ``position_on_terrain`` helper.
+        """
+        assert self._terrain is not None
+        for x, surface in _PHASE4_TURRET_POSITIONS:
+            if surface == "floor":
+                surface_y: float | None = self._terrain.floor_y_at(x)
+            else:
+                surface_y = self._terrain.ceiling_y_at(x)
+                if surface_y is None:
+                    continue
+            turret = GunTurret(
+                world_x=x,
+                surface=surface,
+                cfg=self._cfg.combat,
+                scale=self._cfg.sprite_scale,
+            )
+            turret.position_on_terrain(surface_y)
+            self._turret_base_list.append(turret.base)
+            self._turret_barrel_list.append(turret.barrel)
+            self._turrets.append(turret)
+
     # ---- docking ---------------------------------------------------
 
     def _check_docking(self) -> None:
@@ -537,11 +702,37 @@ class RunLevelView(arcade.View):
         self._dock_cooldown = _DOCK_COOLDOWN
 
     def _on_dock_pressure_spawn(self) -> None:
-        """Phase-4 hook fired every ``spawn_pressure_interval`` while docked.
+        """Spawn a wave of enemy bullets from the right edge of the screen.
 
-        Phase 3 logs only (ASCII per CLAUDE.md).
+        Phase 4 replacement for the Phase 3 log-only placeholder; Phase 6
+        will replace this again with patrol-ship spawns.
         """
-        log.info("dock pressure spawn tick (no-op in phase 3)")
+        import math
+        import random
+
+        sw = self.window.width
+        spawn_x = (
+            self.window.world_camera.position.x + sw / 2.0 + _PRESSURE_WAVE_SPAWN_MARGIN
+        )
+        for _ in range(_PRESSURE_WAVE_COUNT):
+            spawn_y = self._ship.center_y + random.uniform(
+                -_PRESSURE_WAVE_Y_JITTER, _PRESSURE_WAVE_Y_JITTER
+            )
+            dx = self._ship.center_x - spawn_x
+            dy = self._ship.center_y - spawn_y
+            angle = math.atan2(dy, dx)
+            bullet = EnemyBullet(
+                x=spawn_x,
+                y=spawn_y,
+                angle_rad=angle,
+                speed=self._cfg.combat.enemy_bullet_speed,
+                scale=self._cfg.sprite_scale,
+            )
+            self._enemy_bullet_list.append(bullet)
+        log.info(
+            "dock pressure spawn: %d enemy bullets from right edge",
+            _PRESSURE_WAVE_COUNT,
+        )
 
     # ---- canisters -------------------------------------------------
 
@@ -552,6 +743,193 @@ class RunLevelView(arcade.View):
         for canister in hits:
             self._ship.add_fuel(self._cfg.ship.fuel_canister_restore)
             canister.remove_from_sprite_lists()
+
+    # ---- combat ----------------------------------------------------
+
+    def _try_fire(self) -> None:
+        """Fire a player bullet if control is enabled and cooldown has elapsed."""
+        if not self._ship.control_enabled:
+            return
+        if self._fire_cooldown > 0.0:
+            return
+        bullet = PlayerBullet(
+            x=self._ship.center_x + self._ship.width / 2.0,
+            y=self._ship.center_y,
+            speed=self._cfg.combat.player_bullet_speed,
+            scale=self._cfg.sprite_scale,
+        )
+        self._bullet_list.append(bullet)
+        self._fire_cooldown = self._cfg.combat.player_fire_cooldown
+        self._play_sfx(self._sm_player_shoot, self._snd_player_shoot)
+
+    def _update_player_bullets(self, delta_time: float) -> None:
+        """Move player bullets right; cull past world width + margin."""
+        assert self._terrain_cfg is not None
+        cull = self._cfg.combat.bullet_cull_margin
+        right_limit = self._terrain_cfg.world_width + cull
+        for bullet in list(self._bullet_list):
+            assert isinstance(bullet, PlayerBullet)
+            bullet.update_bullet(delta_time)
+            if bullet.center_x > right_limit:
+                bullet.remove_from_sprite_lists()
+
+    def _update_missiles(self, delta_time: float) -> None:
+        """Fire from proximity-triggered silos, then move + cull missiles."""
+        assert self._terrain_cfg is not None
+        cull = self._cfg.combat.bullet_cull_margin
+        world_h = self._terrain_cfg.world_height
+
+        for silo in self._silos:
+            if not silo.is_alive:
+                continue
+            if silo.check_proximity(self._ship.center_x, self._ship.center_y):
+                direction = -1.0 if silo.surface == "ceiling" else 1.0
+                missile = Missile(
+                    x=silo.center_x,
+                    y=silo.center_y + (silo.height / 2.0) * direction,
+                    speed=self._cfg.combat.missile_speed,
+                    direction=direction,
+                    scale=self._cfg.sprite_scale,
+                )
+                self._missile_list.append(missile)
+                self._play_sfx(self._sm_missile, self._snd_missile)
+
+        for missile in list(self._missile_list):
+            assert isinstance(missile, Missile)
+            missile.update_missile(delta_time)
+            if missile.center_y > world_h + cull or missile.center_y < -cull:
+                # Re-arm the closest owning silo (X-coordinate match).
+                for silo in self._silos:
+                    if (
+                        not silo._fire_ready
+                        and abs(silo.center_x - missile.center_x) < 10.0
+                    ):
+                        silo.reset_fire()
+                        break
+                missile.remove_from_sprite_lists()
+
+    def _update_turrets(self, delta_time: float) -> None:
+        """Rotate barrels, fire bullets, then move + cull enemy bullets."""
+        assert self._terrain_cfg is not None
+        cull = self._cfg.combat.bullet_cull_margin
+        world_w = self._terrain_cfg.world_width
+        world_h = self._terrain_cfg.world_height
+
+        for turret in self._turrets:
+            if not turret.is_alive:
+                continue
+            if turret.update(self._ship.center_x, self._ship.center_y, delta_time):
+                bullet = turret.fire_bullet(
+                    self._cfg.combat.enemy_bullet_speed,
+                    self._cfg.sprite_scale,
+                )
+                self._enemy_bullet_list.append(bullet)
+                self._play_sfx(self._sm_enemy_shoot, self._snd_enemy_shoot)
+
+        for bullet in list(self._enemy_bullet_list):
+            assert isinstance(bullet, EnemyBullet)
+            bullet.update_bullet(delta_time)
+            if (
+                bullet.center_x < -cull
+                or bullet.center_x > world_w + cull
+                or bullet.center_y < -cull
+                or bullet.center_y > world_h + cull
+            ):
+                bullet.remove_from_sprite_lists()
+
+    def _check_combat_collisions(self) -> None:
+        """Frame-staggered collision detection.
+
+        Player bullets vs enemies: every frame (must feel responsive).
+        Enemy projectiles vs player: every other frame (CLAUDE.md guidance).
+        """
+        self._check_player_bullet_hits()
+        if self._collision_frame % 2 == 0:
+            self._check_enemy_hits()
+        self._collision_frame += 1
+
+    def _check_player_bullet_hits(self) -> None:
+        damage = self._cfg.combat.player_bullet_damage
+        for bullet in list(self._bullet_list):
+            hits = arcade.check_for_collision_with_list(bullet, self._silo_list)
+            if hits:
+                bullet.remove_from_sprite_lists()
+                silo = hits[0]
+                assert isinstance(silo, MissileSilo)
+                if silo.take_damage(damage):
+                    self._on_enemy_destroyed(silo)
+                continue
+            base_hits = arcade.check_for_collision_with_list(
+                bullet, self._turret_base_list
+            )
+            if base_hits:
+                bullet.remove_from_sprite_lists()
+                base_sprite = base_hits[0]
+                turret = next((t for t in self._turrets if t.base is base_sprite), None)
+                if turret is not None and turret.take_damage(damage):
+                    self._on_turret_destroyed(turret)
+
+    def _check_enemy_hits(self) -> None:
+        if not self._ship.is_alive or self._ship.is_docked:
+            # While docked the brief still allows damage in theory, but
+            # the dock pos sits well above terrain so bullets/missiles
+            # rarely land — keep the gate simple for now.
+            pass
+        missile_hits = arcade.check_for_collision_with_list(
+            self._ship, self._missile_list
+        )
+        for missile in missile_hits:
+            missile.remove_from_sprite_lists()
+            self._damage_player(1)
+            if self._death_timer > 0.0:
+                return
+        bullet_hits = arcade.check_for_collision_with_list(
+            self._ship, self._enemy_bullet_list
+        )
+        for bullet in bullet_hits:
+            bullet.remove_from_sprite_lists()
+            self._damage_player(1)
+            if self._death_timer > 0.0:
+                return
+
+    def _damage_player(self, amount: int) -> None:
+        """Single gate for all enemy-side damage.
+
+        Respects ``god_mode`` and routes 0-HP into the existing
+        destruction sequence (which has its own double-trigger guard).
+        """
+        if self._cfg.god_mode:
+            return
+        if self._ship.take_damage(amount):
+            self._destroy_ship()
+            self._play_sfx(self._sm_player_boom, self._snd_player_boom)
+
+    def _on_enemy_destroyed(self, silo: MissileSilo) -> None:
+        explosion = ExplosionSprite(
+            x=silo.center_x,
+            y=silo.center_y,
+            scale=max(1.0, self._cfg.sprite_scale * 2.0),
+        )
+        self._explosion_list.append(explosion)
+        silo.remove_from_sprite_lists()
+        self._score += 100
+        self._play_sfx(self._sm_enemy_boom, self._snd_enemy_boom)
+
+    def _on_turret_destroyed(self, turret: GunTurret) -> None:
+        explosion = ExplosionSprite(
+            x=turret.base.center_x,
+            y=turret.base.center_y,
+            scale=max(1.0, self._cfg.sprite_scale * 2.0),
+        )
+        self._explosion_list.append(explosion)
+        turret.base.remove_from_sprite_lists()
+        turret.barrel.remove_from_sprite_lists()
+        self._score += 150
+        self._play_sfx(self._sm_enemy_boom, self._snd_enemy_boom)
+
+    def _play_sfx(self, sm: SoundManager, sound: arcade.Sound) -> None:
+        """Volume conversion in one place — effects_volume is 0-100."""
+        sm.play(sound, volume=self._cfg.effects_volume / 100.0)
 
     # ---- dock indicator -------------------------------------------
 
@@ -568,6 +946,7 @@ class RunLevelView(arcade.View):
     # ---- HUD -------------------------------------------------------
 
     def _build_hud(self) -> None:
+        sw = self.window.width
         sh = self.window.height
         common = dict(font_name=FONT_THIN, font_size=14, color=arcade.color.WHITE)
         self._hud_fps = arcade.Text("FPS: --", 12, sh - 20, **common)
@@ -582,6 +961,30 @@ class RunLevelView(arcade.View):
             font_size=14,
             color=arcade.color.YELLOW,
         )
+        self._hud_score = arcade.Text("SCORE  0", sw - 200, sh - 20, **common)
+
+        # Pre-bake the pause dim overlay as a sprite so on_draw never has
+        # to call immediate-mode draw functions for it (which orphan a
+        # GPU buffer every frame).
+        overlay = arcade.SpriteSolidColor(
+            sw,
+            sh,
+            center_x=sw / 2,
+            center_y=sh / 2,
+            color=(0, 0, 0, 120),
+        )
+        self._pause_overlay_list.clear()
+        self._pause_overlay_list.append(overlay)
+        self._paused_text = arcade.Text(
+            "PAUSED",
+            sw / 2,
+            sh / 2,
+            arcade.color.WHITE,
+            font_size=48,
+            font_name=FONT_THIN,
+            anchor_x="center",
+            anchor_y="center",
+        )
 
     def _refresh_hud(self) -> None:
         if self._hud_fps is None:
@@ -590,6 +993,8 @@ class RunLevelView(arcade.View):
         self._hud_world_x.text = f"X: {self._ship.center_x:.0f}"
         self._hud_hp.text = f"HP {self._ship.hp} / {self._ship.MAX_HP}"
         self._hud_fuel_label.text = f"FUEL {self._ship.fuel:.0f}"
+        if self._hud_score is not None:
+            self._hud_score.text = f"SCORE  {self._score}"
 
     def _draw_hud(self) -> None:
         assert self._terrain_cfg is not None
@@ -653,6 +1058,8 @@ class RunLevelView(arcade.View):
             self._hud_hp.draw()
         if self._hud_fuel_label:
             self._hud_fuel_label.draw()
+        if self._hud_score:
+            self._hud_score.draw()
         if self._hud_docked and self._ship.is_docked and self._dock_blink_visible:
             self._hud_docked.draw()
 
