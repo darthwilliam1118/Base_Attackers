@@ -19,7 +19,7 @@ import arcade
 
 from agf.paths import resource_path
 from agf.ships.momentum import MomentumConfig, MomentumShipMixin
-from src.base_attackers.game_config import ShipSettings
+from src.base_attackers.game_config import CombatSettings, ShipSettings
 
 if TYPE_CHECKING:
     from src.base_attackers.terrain import TerrainBase
@@ -31,6 +31,8 @@ class PlayerShip(arcade.Sprite, MomentumShipMixin):
         self,
         momentum_config: MomentumConfig,
         ship_cfg: ShipSettings,
+        combat_cfg: CombatSettings | None = None,
+        scale: float = 1.0,
     ) -> None:
         # Load with the tightest hitbox algorithm so terrain collision
         # tests against the actual ship silhouette, not its bounding box.
@@ -38,7 +40,7 @@ class PlayerShip(arcade.Sprite, MomentumShipMixin):
             resource_path("assets/images/PNG/playerShip1.png"),
             hit_box_algorithm=arcade.hitbox.algo_detailed,
         )
-        arcade.Sprite.__init__(self, texture)
+        arcade.Sprite.__init__(self, texture, scale=scale)
         MomentumShipMixin.__init__(self, momentum_config)
         self.MAX_HP: int = ship_cfg.hp
         self.hp: int = ship_cfg.hp
@@ -50,6 +52,13 @@ class PlayerShip(arcade.Sprite, MomentumShipMixin):
         self.fuel_drain_rate: float = ship_cfg.fuel_drain_rate
         self.fuel_gravity: float = ship_cfg.fuel_gravity
         self.fuel_canister_restore: float = ship_cfg.fuel_canister_restore
+
+        # Combat stats mirrored from CombatSettings so StatModifierEffects
+        # (rapid_fire, big_gun) can mutate them in place.  RunLevelView
+        # reads these instead of cfg.combat when firing / dealing damage.
+        cc = combat_cfg or CombatSettings()
+        self.player_fire_cooldown: float = cc.player_fire_cooldown
+        self.player_bullet_damage: int = cc.player_bullet_damage
 
         # Dock state.
         self.is_docked: bool = False
@@ -116,13 +125,19 @@ class PlayerShip(arcade.Sprite, MomentumShipMixin):
         """True if any vertex of the ship's silhouette would be inside
         terrain when the ship is centred at (*at_x*, *at_y*).
 
-        Uses the texture's detailed (pixel-perfect) hit-box polygon.
-        Vertex sampling is sufficient because the corridor profile is
-        piecewise-constant per ``chunk_width`` (64 px) while the
-        detailed algorithm spaces hit-box points roughly per pixel.
+        Uses the texture's detailed (pixel-perfect) hit-box polygon
+        via ``get_adjusted_points()`` so the scaled silhouette is
+        respected.  Vertex sampling is sufficient because the corridor
+        profile is piecewise-constant per ``chunk_width`` (64 px) while
+        the detailed algorithm spaces hit-box points roughly per pixel.
+        Points come back already translated by the sprite's current
+        center, so subtract that to get a texture-local offset before
+        re-anchoring at the tentative ``(at_x, at_y)``.
         """
-        for px, py in self.hit_box.points:
-            if terrain.point_in_terrain(at_x + px, at_y + py):
+        cx = self.center_x
+        cy = self.center_y
+        for px, py in self.hit_box.get_adjusted_points():
+            if terrain.point_in_terrain(at_x + (px - cx), at_y + (py - cy)):
                 return True
         return False
 

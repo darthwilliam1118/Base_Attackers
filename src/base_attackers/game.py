@@ -32,6 +32,7 @@ class GameWindow(ScrollingGameWindow):
         self.music.play("ending")
 
         self._manager = GameStateManager(self, GameState.SPLASH)
+        self._manager.context["config"] = cfg
         self._manager.transition(GameState.SPLASH)
 
     def _load_fonts(self) -> None:

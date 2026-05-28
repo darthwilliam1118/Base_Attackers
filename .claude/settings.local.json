@@ -41,7 +41,25 @@
       "Bash(python -c \"from agf.sound_manager import SoundManager; help\\(SoundManager.play\\)\")",
       "Bash(python -c \"from agf.sound_manager import SoundManager; print\\([m for m in dir\\(SoundManager\\) if not m.startswith\\('_'\\)]\\)\")",
       "Bash(python -c \"import arcade; s = arcade.Sprite\\(hit_box_algorithm=arcade.hitbox.algo_simple\\); print\\('hit_box_algorithm kwarg accepted'\\)\")",
-      "Bash(python -c \"import PyInstaller; print\\('PyInstaller', PyInstaller.__version__\\)\")"
+      "Bash(python -c \"import PyInstaller; print\\('PyInstaller', PyInstaller.__version__\\)\")",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\darth\\\\Code\\\\Base_Attackers\\\\.venv\\\\Lib\\\\site-packages\\\\agf\\\\powerups\\\\\" -Force)",
+      "Bash(git -C c:\\\\Users\\\\darth\\\\Code\\\\arcade-game-framework log --oneline -5)",
+      "Read(//c/Users/darth/Code/arcade-game-framework/src/agf/powerups/**)",
+      "Read(//c/Users/darth/Code/arcade-game-framework/src/agf/**)",
+      "Bash(git -C ../arcade-game-framework rev-parse f358f9b)",
+      "Bash(python -c \"from agf.powerups import WorldSpacePowerUpSpawner; from agf.powerups.powerup_sprite import PowerUpSprite; print\\('ok', WorldSpacePowerUpSpawner.__module__, hasattr\\(PowerUpSprite, 'register'\\)\\)\")",
+      "Bash(python -c \"import agf, os; print\\(os.path.dirname\\(agf.__file__\\)\\)\")",
+      "Bash(python -c \"from src.base_attackers.game_config import GameConfig; c = GameConfig.load\\(\\); print\\('powerups:', c.powerups.fall_speed_min, c.powerups.spawn_interval_level_2\\); print\\('weights:', list\\(c.powerups.weights.keys\\(\\)\\)\\); print\\('table for L2:', c.powerups.weight_table_for_level\\(2\\)\\); print\\('interval L2:', c.powerups.spawn_interval_for_level\\(2\\)\\); print\\('interval L7:', c.powerups.spawn_interval_for_level\\(7\\)\\)\")",
+      "Bash(python -c \"from agf.paths import set_project_root; set_project_root\\('.'\\); from src.base_attackers.game_config import GameConfig; c = GameConfig.load\\(\\); print\\('powerups:', c.powerups.fall_speed_min, c.powerups.spawn_interval_level_2\\); print\\('weights:', list\\(c.powerups.weights.keys\\(\\)\\)\\); print\\('table for L2:', c.powerups.weight_table_for_level\\(2\\)\\); print\\('interval L2:', c.powerups.spawn_interval_for_level\\(2\\)\\); print\\('interval L7:', c.powerups.spawn_interval_for_level\\(7\\)\\)\")",
+      "Bash(python -c \"from agf.paths import set_project_root; set_project_root\\('.'\\); from src.base_attackers.powerups import BAPowerUpManager, HealthRestoreEffect, RapidFireEffect, BigGunEffect, MultiShotEffect, ShieldEffect, FuelCanisterEffect; print\\('ok'\\)\")",
+      "Bash(pytest --cov=src)",
+      "Bash(pytest)",
+      "Bash(python -c \"import agf.state, os; print\\(agf.state.__file__\\)\")",
+      "Bash(python3 -c \"import arcade; print\\('MOD_SHIFT:', arcade.key.MOD_SHIFT\\)\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\darth\\\\Code\" -Directory)",
+      "Bash(ls -la \"c:\\\\Users\\\\darth\\\\Code\" | grep -E \"Space_Attackers|Base_Attackers\")",
+      "Read(//c/Users/darth/Code/**)",
+      "Bash(git add *)"
     ]
   }
 }

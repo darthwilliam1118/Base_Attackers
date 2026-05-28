@@ -1,9 +1,9 @@
 [game]
-starting_level = 1
-num_lives = 3
+starting_level = 2
+num_lives = 6
 music_volume = 80
 effects_volume = 80
-debug = false
+debug = true
 god_mode = false
 max_window_height = 800
 sprite_scale = 0.5
@@ -60,6 +60,60 @@ bullet_cull_margin = 64.0
 chunk_width = 64
 cull_buffer_chunks = 3
 
+[powerups]
+fall_speed_min = 40.0
+fall_speed_max = 100.0
+
+# Spawn interval per level (seconds). Higher levels = more frequent.
+spawn_interval_level_1 = 20.0
+spawn_interval_level_2 = 14.0
+spawn_interval_level_3 = 10.0
+spawn_interval_default = 8.0   # level 4+
+
+# Effect durations (seconds) for timed effects.
+rapid_fire_duration = 8.0
+big_gun_duration = 10.0
+multi_shot_duration = 8.0
+shield_duration = 12.0
+
+# Stat modifier magnitudes.
+rapid_fire_cooldown_multiplier = 0.4   # fire_cooldown * this value
+big_gun_damage_bonus = 1               # extra damage per shot
+
+[powerups.weights.level_1]
+# Empty — no power-ups spawn on level 1.
+
+[powerups.weights.level_2]
+fuel_canister = 5
+health = 3
+
+[powerups.weights.level_3]
+fuel_canister = 5
+health = 3
+rapid_fire = 2
+
+[powerups.weights.level_4]
+fuel_canister = 4
+health = 3
+rapid_fire = 2
+big_gun = 2
+
+[powerups.weights.level_5]
+fuel_canister = 4
+health = 2
+rapid_fire = 2
+big_gun = 2
+multi_shot = 1
+shield = 1
+
+[powerups.weights.default]
+fuel_canister = 3
+health = 2
+rapid_fire = 2
+big_gun = 2
+multi_shot = 2
+shield = 2
+
 [level_1]
 world_width = 6400
 world_height = 720
@@ -67,5 +121,15 @@ terrain_amplitude = 80.0
 terrain_frequency = 0.008
 terrain_half_width = 280.0
 ceiling_present = false
+terrain_renderer = "polygon"
+terrain_seed = 0
+
+[level_2]
+world_width = 6400
+world_height = 720
+terrain_amplitude = 85.0
+terrain_frequency = 0.008
+terrain_half_width = 280.0
+ceiling_present = true
 terrain_renderer = "polygon"
 terrain_seed = 0

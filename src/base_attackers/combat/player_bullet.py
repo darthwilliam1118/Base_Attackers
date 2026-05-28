@@ -15,7 +15,9 @@ _SPRITE_PATH = "assets/images/PNG/Lasers/laserBlue01_right.png"
 
 
 class PlayerBullet(arcade.Sprite):
-    def __init__(self, x: float, y: float, speed: float, scale: float) -> None:
+    def __init__(
+        self, x: float, y: float, speed: float, scale: float, vy: float = 0.0
+    ) -> None:
         texture = arcade.load_texture(
             resource_path(_SPRITE_PATH),
             hit_box_algorithm=arcade.hitbox.algo_simple,
@@ -24,6 +26,9 @@ class PlayerBullet(arcade.Sprite):
         self.center_x = x
         self.center_y = y
         self._speed = speed
+        self._vy = vy
 
     def update_bullet(self, delta_time: float) -> None:
         self.center_x += self._speed * delta_time
+        if self._vy:
+            self.center_y += self._vy * delta_time

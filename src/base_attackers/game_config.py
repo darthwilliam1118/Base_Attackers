@@ -60,6 +60,31 @@ class CombatSettings:
 
 
 @dataclass
+class PowerUpSettings:
+    fall_speed_min: float = 40.0
+    fall_speed_max: float = 100.0
+    spawn_interval_level_1: float = 20.0
+    spawn_interval_level_2: float = 14.0
+    spawn_interval_level_3: float = 10.0
+    spawn_interval_default: float = 8.0
+    rapid_fire_duration: float = 8.0
+    big_gun_duration: float = 10.0
+    multi_shot_duration: float = 8.0
+    shield_duration: float = 12.0
+    rapid_fire_cooldown_multiplier: float = 0.4
+    big_gun_damage_bonus: int = 1
+    weights: dict[str, dict[str, int]] = field(default_factory=dict)
+
+    def weight_table_for_level(self, level: int) -> dict[str, int]:
+        return self.weights.get(f"level_{level}", self.weights.get("default", {}))
+
+    def spawn_interval_for_level(self, level: int) -> float:
+        return getattr(
+            self, f"spawn_interval_level_{level}", self.spawn_interval_default
+        )
+
+
+@dataclass
 class TerrainSettings:
     chunk_width: int = 64
     cull_buffer_chunks: int = 3
@@ -87,6 +112,7 @@ class GameConfig(BaseGameConfig):
     ship: ShipSettings = field(default_factory=ShipSettings)
     fuel_tower: FuelTowerSettings = field(default_factory=FuelTowerSettings)
     combat: CombatSettings = field(default_factory=CombatSettings)
+    powerups: PowerUpSettings = field(default_factory=PowerUpSettings)
     terrain: TerrainSettings = field(default_factory=TerrainSettings)
     levels: dict[int, LevelSettings] = field(default_factory=dict)
 
@@ -106,6 +132,7 @@ class GameConfig(BaseGameConfig):
         ship_raw = data.get("ship", {})
         fuel_tower_raw = data.get("fuel_tower", {})
         combat_raw = data.get("combat", {})
+        powerups_raw = data.get("powerups", {})
         terrain_raw = data.get("terrain", {})
 
         bg = BackgroundConfig(
@@ -211,6 +238,72 @@ class GameConfig(BaseGameConfig):
                 combat_raw.get("bullet_cull_margin", CombatSettings.bullet_cull_margin)
             ),
         )
+        weights_raw = powerups_raw.get("weights", {})
+        weights: dict[str, dict[str, int]] = {}
+        for level_key, table in weights_raw.items():
+            if isinstance(table, dict):
+                weights[level_key] = {str(k): int(v) for k, v in table.items()}
+        powerups = PowerUpSettings(
+            fall_speed_min=float(
+                powerups_raw.get("fall_speed_min", PowerUpSettings.fall_speed_min)
+            ),
+            fall_speed_max=float(
+                powerups_raw.get("fall_speed_max", PowerUpSettings.fall_speed_max)
+            ),
+            spawn_interval_level_1=float(
+                powerups_raw.get(
+                    "spawn_interval_level_1",
+                    PowerUpSettings.spawn_interval_level_1,
+                )
+            ),
+            spawn_interval_level_2=float(
+                powerups_raw.get(
+                    "spawn_interval_level_2",
+                    PowerUpSettings.spawn_interval_level_2,
+                )
+            ),
+            spawn_interval_level_3=float(
+                powerups_raw.get(
+                    "spawn_interval_level_3",
+                    PowerUpSettings.spawn_interval_level_3,
+                )
+            ),
+            spawn_interval_default=float(
+                powerups_raw.get(
+                    "spawn_interval_default",
+                    PowerUpSettings.spawn_interval_default,
+                )
+            ),
+            rapid_fire_duration=float(
+                powerups_raw.get(
+                    "rapid_fire_duration", PowerUpSettings.rapid_fire_duration
+                )
+            ),
+            big_gun_duration=float(
+                powerups_raw.get("big_gun_duration", PowerUpSettings.big_gun_duration)
+            ),
+            multi_shot_duration=float(
+                powerups_raw.get(
+                    "multi_shot_duration", PowerUpSettings.multi_shot_duration
+                )
+            ),
+            shield_duration=float(
+                powerups_raw.get("shield_duration", PowerUpSettings.shield_duration)
+            ),
+            rapid_fire_cooldown_multiplier=float(
+                powerups_raw.get(
+                    "rapid_fire_cooldown_multiplier",
+                    PowerUpSettings.rapid_fire_cooldown_multiplier,
+                )
+            ),
+            big_gun_damage_bonus=int(
+                powerups_raw.get(
+                    "big_gun_damage_bonus",
+                    PowerUpSettings.big_gun_damage_bonus,
+                )
+            ),
+            weights=weights,
+        )
         terrain = TerrainSettings(
             chunk_width=int(
                 terrain_raw.get("chunk_width", TerrainSettings.chunk_width)
@@ -263,6 +356,7 @@ class GameConfig(BaseGameConfig):
             ship=ship,
             fuel_tower=fuel_tower,
             combat=combat,
+            powerups=powerups,
             terrain=terrain,
             levels=levels,
         )

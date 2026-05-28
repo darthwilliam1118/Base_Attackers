@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
     "arcade>=3.3.3,<4.0",
-    "arcade-game-framework @ git+https://github.com/darthwilliam1118/arcade-game-framework@1e89589ddd777b1f94506168c223b0d4e6cd6c03",
+    "arcade-game-framework @ git+https://github.com/darthwilliam1118/arcade-game-framework@f358f9b149fef0de0374ea81b3be1fe3e315bf43",
 ]
 
 [project.optional-dependencies]

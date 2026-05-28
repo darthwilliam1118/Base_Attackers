@@ -38,6 +38,8 @@ import arcade
 from pyglet.math import Vec2
 
 from agf.paths import resource_path
+from agf.powerups import WorldSpacePowerUpSpawner
+from agf.powerups.powerup_sprite import PowerUpSprite
 from agf.ships.momentum import MomentumConfig
 from agf.sound_manager import SoundManager
 from agf.sprites.explosion import ExplosionSprite
@@ -45,7 +47,9 @@ from agf.ui.text_utils import FONT_THIN
 from src.base_attackers.combat import EnemyBullet, Missile, PlayerBullet
 from src.base_attackers.enemies import GunTurret, MissileSilo
 from src.base_attackers.game_config import GameConfig, LevelSettings
+from src.base_attackers.powerups import BAPowerUpManager
 from src.base_attackers.ships import PlayerShip
+from src.base_attackers.sprites import ShieldSprite
 from src.base_attackers.terrain import (
     PolygonTerrainRenderer,
     TerrainBase,
@@ -71,7 +75,19 @@ _DEADZONE_BOTTOM = 0.20
 
 # Hardcoded for Phase 3 — Phase 7 moves these into level config.
 _PHASE3_TOWER_POSITIONS = [800.0, 2400.0, 4400.0]
-_PHASE3_CANISTER_POSITIONS = [1600.0, 3200.0, 5000.0]
+
+# Phase 5 power-up textures (effect_type -> asset path).  Registered with
+# PowerUpSprite once during RunLevelView.__init__.
+_POWERUP_TEXTURES: dict[str, str] = {
+    "health": "assets/images/PNG/Power-ups/pill_red.png",
+    "fuel_canister": "assets/images/PNG/Power-ups/bolt_gold.png",
+    "rapid_fire": "assets/images/PNG/Power-ups/bolt_silver.png",
+    "big_gun": "assets/images/PNG/Power-ups/bolt_bronze.png",
+    "multi_shot": "assets/images/PNG/Power-ups/star_gold.png",
+    "shield": "assets/images/PNG/Power-ups/powerupBlue_shield.png",
+}
+_POWERUP_FLASH_DURATION = 2.0
+_MULTI_SHOT_SPREAD_DEG = (-10.0, 0.0, 10.0)
 
 # Hardcoded for Phase 4 — Phase 7 moves these into level config.
 _PHASE4_SILO_POSITIONS: list[tuple[float, str]] = [
@@ -153,7 +169,19 @@ class RunLevelView(arcade.View):
         self._manager = manager
         cfg: GameConfig = manager.context.get("config") or GameConfig.load()
         self._cfg = cfg
-        self._level_cfg: LevelSettings = cfg.levels.get(1, LevelSettings())
+        # Active level number: prefer the active player's current_level
+        # (inited from cfg.starting_level by _handle_game_init); fall back
+        # to cfg.starting_level for entry paths that bypass the state
+        # machine (e.g. terrain-test).  Defaults to 1 if neither exists.
+        players = manager.context.get("players") or []
+        idx = manager.context.get("active_player_index", 0)
+        if players and 0 <= idx < len(players):
+            self._level_num: int = int(players[idx].current_level)
+        else:
+            self._level_num = int(cfg.starting_level)
+        self._level_cfg: LevelSettings = cfg.levels.get(
+            self._level_num, LevelSettings()
+        )
         self._held_keys: set[int] = set()
         self._min_camera_left: float = 0.0
 
@@ -168,7 +196,7 @@ class RunLevelView(arcade.View):
             max_speed_x=cfg.ship.max_speed_x,
             max_speed_y=cfg.ship.max_speed_y,
         )
-        self._ship = PlayerShip(mcfg, cfg.ship)
+        self._ship = PlayerShip(mcfg, cfg.ship, cfg.combat, scale=cfg.sprite_scale)
         self._ship.load_scratch_textures()
         self._ship_list = arcade.SpriteList()
         self._ship_list.append(self._ship)
@@ -176,10 +204,9 @@ class RunLevelView(arcade.View):
         if self._ship.scratch_sprite is not None:
             self._scratch_list.append(self._ship.scratch_sprite)
 
-        # Towers + canisters (populated in on_show_view).
+        # Towers (populated in on_show_view).
         self._tower_list = arcade.SpriteList()
         self._towers: list[FuelTower] = []
-        self._canister_list = arcade.SpriteList()
 
         # Enemies + projectiles (populated in on_show_view).
         self._silo_list = arcade.SpriteList()
@@ -236,6 +263,26 @@ class RunLevelView(arcade.View):
         self._hud_fuel_label: arcade.Text | None = None
         self._hud_docked: arcade.Text | None = None
         self._hud_score: arcade.Text | None = None
+        self._hud_powerup_flash: arcade.Text | None = None
+        self._hud_god_mode: arcade.Text | None = None
+        self._hud_debug_hints: arcade.Text | None = None
+
+        # Power-ups.  Manager + spawner are built in on_show_view once
+        # window dims are bound; texture registration is window-free so
+        # it lives here.
+        for et, path in _POWERUP_TEXTURES.items():
+            PowerUpSprite.register(et, resource_path(path))
+        self._powerup_spawner: WorldSpacePowerUpSpawner | None = None
+        self._powerup_manager: BAPowerUpManager | None = None
+        self._powerup_ctx: dict = {}
+        self._powerup_flash_label: str = ""
+        self._powerup_flash_timer: float = 0.0
+        # Shield (OverlayEffect) — kept in a dedicated SpriteList so it
+        # can render with SpriteList.draw().  _shield_sprite_ref caches
+        # the current overlay sprite so we only touch the list when the
+        # effect actually changes (collected / depleted / cleared).
+        self._overlay_list: arcade.SpriteList = arcade.SpriteList()
+        self._shield_sprite_ref: arcade.Sprite | None = None
 
     # ---- lifecycle -------------------------------------------------
 
@@ -250,9 +297,9 @@ class RunLevelView(arcade.View):
             )
             self._terrain.update(0.0)
             self._place_fuel_towers()
-            self._place_fuel_canisters()
             self._place_missile_silos()
             self._place_gun_turrets()
+            self._build_powerup_system()
         if not self._hud_built:
             self._build_hud()
             self._hud_built = True
@@ -299,7 +346,11 @@ class RunLevelView(arcade.View):
         self._ship.drain_fuel(delta_time)
 
         # Fuel-empty drift / gravity.  Routes to _destroy_ship on contact.
-        if self._ship.fuel_empty and not self._ship.is_docked:
+        if (
+            self._ship.fuel_empty
+            and not self._ship.is_docked
+            and not self._cfg.god_mode
+        ):
             self._apply_fuel_gravity(delta_time)
             if self._death_timer > 0.0:
                 return  # collision fired mid-frame
@@ -309,9 +360,20 @@ class RunLevelView(arcade.View):
         cam_left = self.window.world_camera.position.x - self.window.width / 2.0
         self._terrain.update(cam_left)
 
-        # Docking + collectibles.
+        # Docking.
         self._check_docking()
-        self._check_canister_pickup()
+
+        # Power-ups: spawn + pickup, then tick active effects (which
+        # repositions any active overlay sprite via OverlayEffect.update).
+        if self._powerup_spawner is not None:
+            self._powerup_spawner.update(delta_time)
+            self._check_powerup_pickup()
+        if self._powerup_manager is not None:
+            self._powerup_manager.update_effects(
+                delta_time, self._ship, self._powerup_ctx
+            )
+        self._sync_overlay_list(delta_time)
+        self._tick_powerup_flash(delta_time)
 
         # Combat updates.
         self._update_missiles(delta_time)
@@ -333,10 +395,13 @@ class RunLevelView(arcade.View):
     def on_draw(self) -> None:
         self.clear()
         self.window.use_world_camera()
+        # Power-up pickups render BEHIND terrain so they appear to fall
+        # behind rocks / structures as they descend.
+        if self._powerup_spawner is not None:
+            self._powerup_spawner.sprite_list.draw()
         if self._terrain is not None:
             self._terrain.draw()
         self._tower_list.draw()
-        self._canister_list.draw()
         self._silo_list.draw()
         self._turret_base_list.draw()
         self._turret_barrel_list.draw()  # barrels above bases
@@ -345,6 +410,13 @@ class RunLevelView(arcade.View):
         self._bullet_list.draw()  # player bullets above enemy bullets
         self._ship_list.draw()
         self._scratch_list.draw()
+        # Shield overlay (or any other OverlayEffect): managed as a
+        # SpriteList in _sync_overlay_list.  Belt-and-braces position
+        # sync each frame so the shield never lags the ship.
+        if self._shield_sprite_ref is not None:
+            self._shield_sprite_ref.center_x = self._ship.center_x
+            self._shield_sprite_ref.center_y = self._ship.center_y
+        self._overlay_list.draw()
         self._explosion_list.draw()  # always on top
 
         self.window.use_gui_camera()
@@ -361,8 +433,9 @@ class RunLevelView(arcade.View):
     def on_key_press(self, key: int, modifiers: int) -> None:
         # P toggles pause.  Pauses music on entry, resumes on exit, and
         # runs a full GC sweep on entry so nothing accumulates during
-        # the freeze (Space Attackers pattern).
-        if key == arcade.key.P:
+        # the freeze (Space Attackers pattern).  Shift+P is reserved
+        # for the debug power-up spawner — let it through.
+        if key == arcade.key.P and not (modifiers & arcade.key.MOD_SHIFT):
             self._paused = not self._paused
             if self._paused:
                 gc.collect()
@@ -373,6 +446,22 @@ class RunLevelView(arcade.View):
         # While paused, swallow all other keypresses.
         if self._paused:
             return
+        # Debug-mode shortcuts (cfg.debug = true).  Placed before the
+        # SPACE / _held_keys.add block so Shift-modified keys don't
+        # bleed into the held-key set or fire a normal action.
+        if self._cfg.debug and (modifiers & arcade.key.MOD_SHIFT):
+            if key == arcade.key.G:
+                self._toggle_god_mode()
+                return
+            if key == arcade.key.P:
+                self._debug_spawn_powerup()
+                return
+            if key == arcade.key.E:
+                self._debug_complete_level()
+                return
+            if key == arcade.key.K:
+                self._destroy_ship()
+                return
         # SPACE: undock if docked, otherwise fire a player bullet.
         # The is_docked check is the gate — same key cannot do both.
         if key == arcade.key.SPACE:
@@ -385,12 +474,51 @@ class RunLevelView(arcade.View):
     def on_key_release(self, key: int, modifiers: int) -> None:
         self._held_keys.discard(key)
 
+    # ---- debug -----------------------------------------------------
+
+    def _toggle_god_mode(self) -> None:
+        """Flip cfg.god_mode in place.  HUD picks it up next frame."""
+        self._cfg.god_mode = not self._cfg.god_mode
+
+    def _debug_complete_level(self) -> None:
+        """Jump straight to LevelCompleteView, which increments the
+        active player's current_level and cycles back into RunLevelView.
+        """
+        from src.base_attackers.state import GameState
+
+        self._manager.transition(GameState.LEVEL_COMPLETE)
+
+    def _debug_spawn_powerup(self) -> None:
+        """Drop one uniformly-random power-up into the visible window.
+
+        Bypasses the spawner's per-level weight table so level 1 (empty
+        table) can still be used for playtesting.  Reuses the spawner's
+        private ``_spawn_sprite`` for sprite + parallel-list bookkeeping.
+        """
+        import random
+
+        if self._powerup_spawner is None or self._terrain_cfg is None:
+            return
+        effect_type = random.choice(list(_POWERUP_TEXTURES))
+        sw = self.window.width
+        cx = self.window.world_camera.position.x
+        cam_left = cx - sw / 2.0
+        cam_right = cx + sw / 2.0
+        # Spawn just under the HUD black bar — same band the auto-spawner
+        # uses (see _build_powerup_system camera_rect clamp).
+        world_h = float(self._terrain_cfg.world_height)
+        spawn_x = random.uniform(cam_left + 32.0, cam_right - 32.0)
+        spawn_y = random.uniform(world_h - 40.0, world_h - 8.0)
+        self._powerup_spawner._spawn_sprite(effect_type, spawn_x, spawn_y)
+
     # ---- ship + camera --------------------------------------------
 
     def _update_ship(self, delta_time: float) -> None:
         # Skip entirely when control is disabled (docked or fuel-empty);
-        # movement in those states is handled elsewhere.
-        if self._ship.is_docked or self._ship.fuel_empty:
+        # movement in those states is handled elsewhere.  God mode keeps
+        # the ship steerable through fuel-empty so the fuel-death
+        # consequence is fully neutralised (gauge still drains visibly).
+        if self._ship.is_docked or (self._ship.fuel_empty and not self._cfg.god_mode):
             return
 
         # Read input.
@@ -411,9 +539,13 @@ class RunLevelView(arcade.View):
 
         new_x, new_y = self._apply_position_bounds(new_x, new_y)
 
-        # Terrain collision = destruction sequence.
+        # Terrain collision = destruction sequence.  God mode bypasses
+        # the kill — the position-bound clamp above still keeps the
+        # ship inside the window/world.
         assert self._terrain is not None
-        if self._ship.collides_with_terrain(self._terrain, new_x, new_y):
+        if not self._cfg.god_mode and self._ship.collides_with_terrain(
+            self._terrain, new_x, new_y
+        ):
             self._on_terrain_collision()
             return
 
@@ -469,7 +601,9 @@ class RunLevelView(arcade.View):
         new_y = self._ship.center_y + self._ship.velocity_y * delta_time
         new_x, new_y = self._apply_position_bounds(new_x, new_y)
 
-        if self._ship.collides_with_terrain(self._terrain, new_x, new_y):
+        if not self._cfg.god_mode and self._ship.collides_with_terrain(
+            self._terrain, new_x, new_y
+        ):
             self._on_terrain_collision()
             return
 
@@ -540,6 +674,14 @@ class RunLevelView(arcade.View):
         self._ship.dock_tower = None
         if self._ship.scratch_sprite is not None:
             self._ship.scratch_sprite.visible = False
+        if self._powerup_spawner is not None:
+            self._powerup_spawner.clear()
+        if self._powerup_manager is not None:
+            self._powerup_manager.clear_all(self._ship, self._powerup_ctx)
+            self._powerup_flash_label = ""
+            self._powerup_flash_timer = 0.0
+        self._overlay_list.clear()
+        self._shield_sprite_ref = None
         self._death_timer = _DEATH_DURATION
 
     def _spawn_ship(self) -> None:
@@ -577,17 +719,6 @@ class RunLevelView(arcade.View):
             tower.dock_y = tower.center_y + tower.height / 2.0 + 12.0
             self._tower_list.append(tower)
             self._towers.append(tower)
-
-    def _place_fuel_canisters(self) -> None:
-        assert self._terrain is not None
-        for x in _PHASE3_CANISTER_POSITIONS:
-            canister = arcade.Sprite(
-                resource_path("assets/images/PNG/Power-ups/bolt_gold.png"),
-                scale=self._cfg.sprite_scale,
-            )
-            canister.center_x = x
-            canister.center_y = self._terrain.floor_y_at(x) + 80.0
-            self._canister_list.append(canister)
 
     def _place_missile_silos(self) -> None:
         """Construct each silo at a dummy y, then position using
@@ -734,24 +865,134 @@ class RunLevelView(arcade.View):
             _PRESSURE_WAVE_COUNT,
         )
 
-    # ---- canisters -------------------------------------------------
+    # ---- power-ups -------------------------------------------------
 
-    def _check_canister_pickup(self) -> None:
-        if not self._canister_list:
+    def _build_powerup_system(self) -> None:
+        """Construct the world-space spawner and effect manager."""
+        assert self._terrain is not None
+        sw = self.window.width
+        sh = self.window.height
+        # Power-up pickups render at native size (sprite_scale is for
+        # ship + enemies only); the shield overlay is the exception —
+        # it wraps the ship so it scales with ship_scale.
+        self._powerup_manager = BAPowerUpManager(
+            self._cfg.powerups,
+            self._cfg.ship.fuel_canister_restore,
+            sw,
+            sh,
+            ship_scale=self._cfg.sprite_scale,
+        )
+        self._powerup_ctx = {
+            "window_width": sw,
+            "window_height": sh,
+            "sprite_scale": 1.0,
+        }
+        weight_table = self._cfg.powerups.weight_table_for_level(self._level_num)
+        interval = self._cfg.powerups.spawn_interval_for_level(self._level_num)
+        assert self._terrain_cfg is not None
+        world_h = float(self._terrain_cfg.world_height)
+
+        def camera_rect() -> tuple[float, float, float, float]:
+            """Returns (cam_left, cam_bottom, cam_right, cam_top) — but
+            ``cam_top`` is clamped to (world_height - 24) so the agf
+            spawner places pickups at ``world_height - 8`` (just under
+            the HUD black bar) instead of high above the camera.  Only
+            ``cam_left`` is used for culling, so this clamp is safe.
+            """
+            cx = self.window.world_camera.position.x
+            cy = self.window.world_camera.position.y
+            cam_top_real = cy + sh / 2.0
+            cam_top_clamped = min(cam_top_real, world_h - 24.0)
+            return (
+                cx - sw / 2.0,
+                cy - sh / 2.0,
+                cx + sw / 2.0,
+                cam_top_clamped,
+            )
+
+        self._powerup_spawner = WorldSpacePowerUpSpawner(
+            weight_table=weight_table,
+            camera_rect=camera_rect,
+            floor_y_at=self._terrain.floor_y_at,
+            spawn_interval=interval,
+            fall_speed_min=self._cfg.powerups.fall_speed_min,
+            fall_speed_max=self._cfg.powerups.fall_speed_max,
+            sprite_scale=1.0,
+        )
+
+    def _check_powerup_pickup(self) -> None:
+        if self._powerup_spawner is None or self._powerup_manager is None:
             return
-        hits = arcade.check_for_collision_with_list(self._ship, self._canister_list)
-        for canister in hits:
-            self._ship.add_fuel(self._cfg.ship.fuel_canister_restore)
-            canister.remove_from_sprite_lists()
+        hits = arcade.check_for_collision_with_list(
+            self._ship, self._powerup_spawner.sprite_list
+        )
+        for sprite in hits:
+            effect_type = self._powerup_spawner.collect(sprite)
+            if effect_type is None:
+                continue
+            effect = self._powerup_manager.create_effect(effect_type)
+            self._powerup_manager.apply_effect(effect, self._ship, self._powerup_ctx)
+            self._on_powerup_collected(effect_type)
+
+    def _on_powerup_collected(self, effect_type: str) -> None:
+        self._play_sfx(self._sm_player_shoot, self._snd_player_shoot)
+        self._powerup_flash_label = effect_type.replace("_", " ").upper()
+        self._powerup_flash_timer = _POWERUP_FLASH_DURATION
+
+    def _tick_powerup_flash(self, delta_time: float) -> None:
+        if self._powerup_flash_timer > 0.0:
+            self._powerup_flash_timer -= delta_time
+            if self._powerup_flash_timer <= 0.0:
+                self._powerup_flash_label = ""
+
+    def _sync_overlay_list(self, delta_time: float) -> None:
+        """Keep _overlay_list in lock-step with the active OverlayEffect.
+
+        Adds the sprite on collection, removes it on expire/depletion,
+        and ticks the shield alpha pulse each frame.  Cache-on-change so
+        we don't churn the SpriteList every frame.
+        """
+        overlay = (
+            self._powerup_manager.get_active_overlay()
+            if self._powerup_manager is not None
+            else None
+        )
+        new_ref = overlay.get_overlay_sprite() if overlay is not None else None
+        if new_ref is not self._shield_sprite_ref:
+            self._overlay_list.clear()
+            if new_ref is not None:
+                self._overlay_list.append(new_ref)
+            self._shield_sprite_ref = new_ref
+        if isinstance(self._shield_sprite_ref, ShieldSprite):
+            self._shield_sprite_ref.pulse(delta_time)
 
     # ---- combat ----------------------------------------------------
 
     def _try_fire(self) -> None:
-        """Fire a player bullet if control is enabled and cooldown has elapsed."""
+        """Fire a player bullet if control is enabled and cooldown has elapsed.
+
+        Cooldown and damage live on PlayerShip so StatModifierEffect
+        instances (rapid_fire, big_gun) can mutate them in place.  When
+        a MultiShotEffect is active, the spread variant fires instead.
+        """
         if not self._ship.control_enabled:
             return
         if self._fire_cooldown > 0.0:
             return
+        if self._is_multi_shot_active():
+            self._fire_multi_shot()
+        else:
+            self._fire_single_shot()
+        self._fire_cooldown = self._ship.player_fire_cooldown
+        self._play_sfx(self._sm_player_shoot, self._snd_player_shoot)
+
+    def _is_multi_shot_active(self) -> bool:
+        if self._powerup_manager is None:
+            return False
+        behavior = self._powerup_manager.get_active_behavior()
+        return behavior is not None and behavior.effect_type == "multi_shot"
+
+    def _fire_single_shot(self) -> None:
         bullet = PlayerBullet(
             x=self._ship.center_x + self._ship.width / 2.0,
             y=self._ship.center_y,
@@ -759,8 +1000,25 @@ class RunLevelView(arcade.View):
             scale=self._cfg.sprite_scale,
         )
         self._bullet_list.append(bullet)
-        self._fire_cooldown = self._cfg.combat.player_fire_cooldown
-        self._play_sfx(self._sm_player_shoot, self._snd_player_shoot)
+
+    def _fire_multi_shot(self) -> None:
+        """Three bullets at -10°/0°/+10° from the ship nose."""
+        import math
+
+        speed = self._cfg.combat.player_bullet_speed
+        x0 = self._ship.center_x + self._ship.width / 2.0
+        y0 = self._ship.center_y
+        for angle_deg in _MULTI_SHOT_SPREAD_DEG:
+            rad = math.radians(angle_deg)
+            self._bullet_list.append(
+                PlayerBullet(
+                    x=x0,
+                    y=y0,
+                    speed=speed * math.cos(rad),
+                    scale=self._cfg.sprite_scale,
+                    vy=speed * math.sin(rad),
+                )
+            )
 
     def _update_player_bullets(self, delta_time: float) -> None:
         """Move player bullets right; cull past world width + margin."""
@@ -849,7 +1107,7 @@ class RunLevelView(arcade.View):
         self._collision_frame += 1
 
     def _check_player_bullet_hits(self) -> None:
-        damage = self._cfg.combat.player_bullet_damage
+        damage = self._ship.player_bullet_damage
         for bullet in list(self._bullet_list):
             hits = arcade.check_for_collision_with_list(bullet, self._silo_list)
             if hits:
@@ -895,11 +1153,21 @@ class RunLevelView(arcade.View):
     def _damage_player(self, amount: int) -> None:
         """Single gate for all enemy-side damage.
 
-        Respects ``god_mode`` and routes 0-HP into the existing
-        destruction sequence (which has its own double-trigger guard).
+        Respects ``god_mode``, lets an active ShieldEffect absorb the
+        hit first, and routes 0-HP into the destruction sequence (which
+        has its own double-trigger guard).
         """
         if self._cfg.god_mode:
             return
+        if self._powerup_manager is not None:
+            overlay = self._powerup_manager.get_active_overlay()
+            if overlay is not None and overlay.effect_type == "shield":
+                depleted = overlay.on_hit_absorbed()
+                if depleted:
+                    self._powerup_manager.remove_effect(
+                        overlay, self._ship, self._powerup_ctx
+                    )
+                return  # hit absorbed by shield
         if self._ship.take_damage(amount):
             self._destroy_ship()
             self._play_sfx(self._sm_player_boom, self._snd_player_boom)
@@ -962,6 +1230,38 @@ class RunLevelView(arcade.View):
             color=arcade.color.YELLOW,
         )
         self._hud_score = arcade.Text("SCORE  0", sw - 200, sh - 20, **common)
+        self._hud_powerup_flash = arcade.Text(
+            "",
+            sw / 2,
+            sh - 20,
+            arcade.color.YELLOW,
+            font_size=16,
+            font_name=FONT_THIN,
+            anchor_x="center",
+        )
+        # Debug HUD: "GOD MODE" tag (only when god_mode active) and a
+        # static hints line (only when cfg.debug is true).  Both sit on
+        # the top row of the existing black mask band.  GOD MODE is
+        # placed left of FPS so it stays clear of the centered hints
+        # line and the right-side SCORE.
+        self._hud_god_mode = arcade.Text(
+            "GOD MODE",
+            90,
+            sh - 20,
+            arcade.color.YELLOW,
+            font_size=14,
+            font_name=FONT_THIN,
+            anchor_x="left",
+        )
+        self._hud_debug_hints = arcade.Text(
+            "DEBUG  Shift+G god  Shift+P p-up  Shift+E level+  Shift+K kill",
+            sw / 2,
+            sh - 20,
+            (180, 180, 180),
+            font_size=11,
+            font_name=FONT_THIN,
+            anchor_x="center",
+        )
 
         # Pre-bake the pause dim overlay as a sprite so on_draw never has
         # to call immediate-mode draw functions for it (which orphan a
@@ -995,6 +1295,8 @@ class RunLevelView(arcade.View):
         self._hud_fuel_label.text = f"FUEL {self._ship.fuel:.0f}"
         if self._hud_score is not None:
             self._hud_score.text = f"SCORE  {self._score}"
+        if self._hud_powerup_flash is not None:
+            self._hud_powerup_flash.text = self._powerup_flash_label
 
     def _draw_hud(self) -> None:
         assert self._terrain_cfg is not None
@@ -1062,6 +1364,12 @@ class RunLevelView(arcade.View):
             self._hud_score.draw()
         if self._hud_docked and self._ship.is_docked and self._dock_blink_visible:
             self._hud_docked.draw()
+        if self._hud_powerup_flash and self._powerup_flash_label:
+            self._hud_powerup_flash.draw()
+        if self._cfg.debug and self._hud_debug_hints is not None:
+            self._hud_debug_hints.draw()
+        if self._cfg.god_mode and self._hud_god_mode is not None:
+            self._hud_god_mode.draw()
 
     def _draw_bar(
         self,

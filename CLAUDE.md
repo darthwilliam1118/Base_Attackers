@@ -482,18 +482,51 @@ the power-up spawner.
 
 ---
 
-## Power-up system
-- Reuses agf power-up infrastructure (effect categories, manager, spawner)
-- Power-ups exist in world space — they have world coordinates and scroll
-  with the camera; cull when they exit the left edge of the camera
-- Fuel canister is a new InstantEffect specific to Base Attackers —
-  restores partial fuel on collection
-- Effect category rules (enforced by PowerUpManager):
+## Power-up system (Base Attackers specific)
+- Spawning is world-space.  `agf.powerups.WorldSpacePowerUpSpawner` is
+  built in `RunLevelView._build_powerup_system()` once terrain exists
+  and owned by the view — NOT by `BAPowerUpManager`.  agf's screen-space
+  `PowerUpSpawner` is unused; `BAPowerUpManager.update_effects` ticks
+  only `_active_effects` and never drives the inherited spawner.
+- `BAPowerUpManager(cfg.powerups, fuel_canister_restore, w, h, scale)` —
+  the second positional arg is `cfg.ship.fuel_canister_restore` since
+  the canister value lives on `ShipSettings`, not `PowerUpSettings`.
+- Effect category rules (enforced by agf `PowerUpManager._add_effect`):
     - One BehaviorEffect at a time (new replaces old)
     - One ConstraintEffect at a time
     - One OverlayEffect at a time
     - Multiple StatModifierEffects stack
     - InstantEffects applied immediately, never tracked
+- `BAPowerUpManager.apply_effect(effect, ship, ctx)` is the public
+  wrapper around agf's `_add_effect`.  Use it instead of touching the
+  underscore method directly.
+- Stat routing: `PlayerShip` mirrors `player_fire_cooldown` and
+  `player_bullet_damage` (initialised from `cfg.combat`).  `_try_fire`
+  and `_check_player_bullet_hits` read from the ship, NOT from
+  `cfg.combat`.  `RapidFireEffect` and `BigGunEffect` mutate those
+  attributes via `StatModifierEffect.apply()`; the existing read sites
+  pick up the new value automatically.
+- `PowerUpSprite` registry key is `effect_type` (NOT `type_name`).
+  `WorldSpacePowerUpSpawner.collect()` returns the `effect_type` string;
+  pass it straight to `manager.create_effect()`.
+- Texture registration via `PowerUpSprite.register(effect_type, path)`
+  must happen before any spawn.  `RunLevelView.__init__` does this for
+  all six types from `_POWERUP_TEXTURES`.
+- Multi-shot bullet spawn lives in `RunLevelView._fire_multi_shot`, not
+  in `MultiShotEffect.get_bullets()` (which returns `[]`).  Keeps the
+  PlayerBullet/SFX/cooldown coupling with the existing firing pipeline.
+- Shield damage gate: `_damage_player` checks for an active
+  `OverlayEffect` with `effect_type == "shield"`, calls
+  `on_hit_absorbed()` on it, and force-removes via
+  `manager.remove_effect(...)` when depleted.  Damage never reaches
+  `ship.take_damage` while a shield is active.
+- Spawner + manager cleanup happens in `_destroy_ship`:
+  `spawner.clear()` + `manager.clear_all(ship, ctx)`.  Don't add a
+  second cleanup path — the death sequence is the single funnel.
+- Per-level weight table comes from
+  `cfg.powerups.weight_table_for_level(level_num)`; empty dict ⇒ no
+  spawning.  Level 1 is intentionally empty.  `_level_num` is hardcoded
+  to 1 in `__init__` until Phase 7 wires it through state context.
 
 ---
 
