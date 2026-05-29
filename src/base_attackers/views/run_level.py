@@ -45,7 +45,15 @@ from agf.sound_manager import SoundManager
 from agf.sprites.explosion import ExplosionSprite
 from agf.ui.text_utils import FONT_THIN
 from src.base_attackers.combat import EnemyBullet, Missile, PlayerBullet
-from src.base_attackers.enemies import GunTurret, MissileSilo
+from src.base_attackers.enemies import (
+    BEHAVIOUR_INTERCEPT,
+    BEHAVIOUR_KAMIKAZE,
+    BEHAVIOUR_STRAIGHT,
+    GunTurret,
+    LaserTurret,
+    MissileSilo,
+    PatrolShip,
+)
 from src.base_attackers.game_config import GameConfig, LevelSettings
 from src.base_attackers.powerups import BAPowerUpManager
 from src.base_attackers.ships import PlayerShip
@@ -89,17 +97,30 @@ _POWERUP_TEXTURES: dict[str, str] = {
 _POWERUP_FLASH_DURATION = 2.0
 _MULTI_SHOT_SPREAD_DEG = (-10.0, 0.0, 10.0)
 
-# Hardcoded for Phase 4 — Phase 7 moves these into level config.
+# Hardcoded for Phase 4 — Phase 7 moves these into level config.  Ceiling
+# variants (Phase 6) only appear when the active level has
+# ceiling_present = true; otherwise _place_* skips them silently.
 _PHASE4_SILO_POSITIONS: list[tuple[float, str]] = [
     (1200.0, "floor"),
     (2800.0, "floor"),
     (4000.0, "floor"),
+    (2000.0, "ceiling"),
+    (4800.0, "ceiling"),
 ]
 _PHASE4_TURRET_POSITIONS: list[tuple[float, str]] = [
     (600.0, "floor"),
     (1800.0, "floor"),
     (3400.0, "floor"),
     (5200.0, "floor"),
+    (2400.0, "ceiling"),
+]
+
+# Hardcoded for Phase 6 — Phase 7 moves these into level config.
+_PHASE6_LASER_POSITIONS: list[tuple[float, str]] = [
+    (1000.0, "floor"),
+    (3000.0, "floor"),
+    (5000.0, "floor"),
+    (3600.0, "ceiling"),
 ]
 
 # SFX paths and SoundManager throttle limits.
@@ -107,11 +128,6 @@ _SND_PLAYER_SHOOT = "assets/sounds/laserSmall_000.wav"
 _SND_ENEMY_SHOOT = "assets/sounds/laserLarge_000.wav"
 _SND_ENEMY_BOOM = "assets/sounds/explosionCrunch_000.wav"
 _SND_PLAYER_BOOM = "assets/sounds/explosionCrunch_004.wav"
-
-# Dock-pressure wave size.
-_PRESSURE_WAVE_COUNT = 3
-_PRESSURE_WAVE_Y_JITTER = 80.0
-_PRESSURE_WAVE_SPAWN_MARGIN = 50.0
 
 # Death sequence + dock indicator timings.
 _DEATH_DURATION = 1.5
@@ -214,6 +230,11 @@ class RunLevelView(arcade.View):
         self._turret_base_list = arcade.SpriteList()
         self._turret_barrel_list = arcade.SpriteList()
         self._turrets: list[GunTurret] = []
+        self._laser_base_list = arcade.SpriteList()
+        self._laser_barrel_list = arcade.SpriteList()
+        self._laser_turrets: list[LaserTurret] = []
+        self._patrol_list = arcade.SpriteList()  # PatrolShip sprites
+        self._patrols: list[PatrolShip] = []
         self._bullet_list = arcade.SpriteList()  # player bullets
         self._enemy_bullet_list = arcade.SpriteList()
         self._missile_list = arcade.SpriteList()
@@ -222,6 +243,9 @@ class RunLevelView(arcade.View):
         self._fire_cooldown: float = 0.0
         self._collision_frame: int = 0
         self._score: int = 0
+        # Autonomous patrol-ship spawn cadence.  Seeded short so the first
+        # enemy appears soon after the level starts.
+        self._patrol_spawn_timer: float = 2.0
 
         # Sound: one arcade.Sound + one SoundManager per effect type
         # (CLAUDE.md pattern).  Volume passed to play() as 0.0-1.0.
@@ -299,6 +323,7 @@ class RunLevelView(arcade.View):
             self._place_fuel_towers()
             self._place_missile_silos()
             self._place_gun_turrets()
+            self._place_laser_turrets()
             self._build_powerup_system()
         if not self._hud_built:
             self._build_hud()
@@ -363,6 +388,13 @@ class RunLevelView(arcade.View):
         # Docking.
         self._check_docking()
 
+        # Patrol ships (mobile enemies) — periodic spawn, then move/cull.
+        self._patrol_spawn_timer -= delta_time
+        if self._patrol_spawn_timer <= 0.0:
+            self._spawn_patrol_ship()
+            self._patrol_spawn_timer = self._cfg.combat.patrol_spawn_interval
+        self._update_patrol_ships(delta_time)
+
         # Power-ups: spawn + pickup, then tick active effects (which
         # repositions any active overlay sprite via OverlayEffect.update).
         if self._powerup_spawner is not None:
@@ -378,6 +410,9 @@ class RunLevelView(arcade.View):
         # Combat updates.
         self._update_missiles(delta_time)
         self._update_turrets(delta_time)
+        self._update_laser_turrets(delta_time)
+        if self._death_timer > 0.0:
+            return  # laser beam killed the player this frame
         self._update_player_bullets(delta_time)
         self._check_combat_collisions()
         if self._death_timer > 0.0:
@@ -402,9 +437,13 @@ class RunLevelView(arcade.View):
         if self._terrain is not None:
             self._terrain.draw()
         self._tower_list.draw()
+        self._patrol_list.draw()
         self._silo_list.draw()
         self._turret_base_list.draw()
         self._turret_barrel_list.draw()  # barrels above bases
+        self._laser_base_list.draw()
+        self._laser_barrel_list.draw()  # barrels above bases
+        self._draw_laser_beams()  # immediate-mode lines, ephemeral
         self._missile_list.draw()
         self._enemy_bullet_list.draw()
         self._bullet_list.draw()  # player bullets above enemy bullets
@@ -767,6 +806,29 @@ class RunLevelView(arcade.View):
             self._turret_barrel_list.append(turret.barrel)
             self._turrets.append(turret)
 
+    def _place_laser_turrets(self) -> None:
+        """Construct each laser turret, then position via the composite's
+        own ``position_on_terrain`` helper (same pattern as GunTurret).
+        """
+        assert self._terrain is not None
+        for x, surface in _PHASE6_LASER_POSITIONS:
+            if surface == "floor":
+                surface_y: float | None = self._terrain.floor_y_at(x)
+            else:
+                surface_y = self._terrain.ceiling_y_at(x)
+                if surface_y is None:
+                    continue
+            lt = LaserTurret(
+                world_x=x,
+                surface=surface,
+                cfg=self._cfg.combat,
+                scale=self._cfg.sprite_scale,
+            )
+            lt.position_on_terrain(surface_y)
+            self._laser_base_list.append(lt.base)
+            self._laser_barrel_list.append(lt.barrel)
+            self._laser_turrets.append(lt)
+
     # ---- docking ---------------------------------------------------
 
     def _check_docking(self) -> None:
@@ -833,37 +895,134 @@ class RunLevelView(arcade.View):
         self._dock_cooldown = _DOCK_COOLDOWN
 
     def _on_dock_pressure_spawn(self) -> None:
-        """Spawn a wave of enemy bullets from the right edge of the screen.
-
-        Phase 4 replacement for the Phase 3 log-only placeholder; Phase 6
-        will replace this again with patrol-ship spawns.
+        """Spawn a patrol ship from the right when the player lingers at a
+        tower.  Phase 6 replacement for the Phase 4 enemy-bullet wave.
         """
-        import math
+        self._spawn_patrol_ship(behaviour=BEHAVIOUR_INTERCEPT)
+        log.info("dock pressure: spawned intercept patrol ship")
+
+    # ---- patrol ships ----------------------------------------------
+
+    def _spawn_patrol_ship(self, behaviour: str | None = None) -> None:
+        """Spawn one patrol ship off the right edge of the camera view.
+
+        Y position is randomised within the visible corridor at the spawn
+        X, clamped above floor_y and below ceiling_y (or world_height).
+        """
         import random
 
+        assert self._terrain is not None and self._terrain_cfg is not None
+
+        cfg = self._cfg.combat
         sw = self.window.width
         spawn_x = (
-            self.window.world_camera.position.x + sw / 2.0 + _PRESSURE_WAVE_SPAWN_MARGIN
+            self.window.world_camera.position.x + sw / 2.0 + cfg.patrol_spawn_margin
         )
-        for _ in range(_PRESSURE_WAVE_COUNT):
-            spawn_y = self._ship.center_y + random.uniform(
-                -_PRESSURE_WAVE_Y_JITTER, _PRESSURE_WAVE_Y_JITTER
+
+        if behaviour is None:
+            behaviour = self._pick_patrol_behaviour()
+
+        # Y: random position in the open corridor at spawn_x.
+        floor_y = self._terrain.floor_y_at(spawn_x)
+        ceil_y = self._terrain.ceiling_y_at(spawn_x)
+        y_min = floor_y + 30.0
+        y_max = (
+            ceil_y - 30.0
+            if ceil_y is not None
+            else self._terrain_cfg.world_height - 30.0
+        )
+        if y_min >= y_max:
+            y_min = floor_y + 10.0
+            y_max = y_min + 40.0
+        spawn_y = random.uniform(y_min, y_max)
+
+        # Speed varies by behaviour.
+        if behaviour == BEHAVIOUR_KAMIKAZE:
+            speed = random.uniform(cfg.patrol_speed_max * 0.8, cfg.patrol_speed_max)
+        elif behaviour == BEHAVIOUR_INTERCEPT:
+            speed = random.uniform(
+                cfg.patrol_speed_min * 1.2, cfg.patrol_speed_max * 0.8
             )
-            dx = self._ship.center_x - spawn_x
-            dy = self._ship.center_y - spawn_y
+        else:
+            speed = random.uniform(cfg.patrol_speed_min, cfg.patrol_speed_max * 0.6)
+
+        ship = PatrolShip(
+            world_x=spawn_x,
+            world_y=spawn_y,
+            behaviour=behaviour,
+            speed=speed,
+            cfg=cfg,
+            scale=self._cfg.sprite_scale,
+        )
+        self._patrol_list.append(ship)
+        self._patrols.append(ship)
+
+    def _pick_patrol_behaviour(self) -> str:
+        """Weight behaviours by level — higher levels get more kamikazes."""
+        import random
+
+        level = self._level_num
+        weights = {
+            BEHAVIOUR_STRAIGHT: max(1, 5 - level),
+            BEHAVIOUR_INTERCEPT: 3,
+            BEHAVIOUR_KAMIKAZE: min(5, level),
+        }
+        names = list(weights.keys())
+        wts = list(weights.values())
+        return random.choices(names, weights=wts, k=1)[0]
+
+    def _update_patrol_ships(self, delta_time: float) -> None:
+        """Steer + move each patrol ship; explode on terrain, fire, cull."""
+        assert self._terrain is not None and self._terrain_cfg is not None
+        cull = self._cfg.combat.bullet_cull_margin
+        cam_left = self.window.world_camera.position.x - self.window.width / 2.0
+        world_w = self._terrain_cfg.world_width
+        world_h = self._terrain_cfg.world_height
+
+        for ship in list(self._patrols):
+            if not ship.is_alive:
+                continue
+            ship.update_patrol(
+                self._ship.center_x, self._ship.center_y, delta_time, self._terrain
+            )
+            # Terrain contact destroys the patrol (no score — not a kill).
+            if self._terrain.point_in_terrain(ship.center_x, ship.center_y):
+                self._explode_patrol(ship)
+                continue
+            # Fire at the player (non-kamikaze only) while on screen.
+            if self._is_on_screen(ship.center_x) and ship.try_fire():
+                self._fire_patrol_bullet(ship)
+            # Cull off-world.
+            if (
+                ship.center_x < cam_left - cull
+                or ship.center_x > world_w + cull
+                or ship.center_y < -cull
+                or ship.center_y > world_h + cull
+            ):
+                ship.remove_from_sprite_lists()
+                self._patrols.remove(ship)
+
+    def _fire_patrol_bullet(self, ship: PatrolShip) -> None:
+        """Spawn an enemy bullet: straight ships fire forward (left),
+        intercept ships aim at the player's current position.
+        """
+        import math
+
+        if ship.behaviour == BEHAVIOUR_INTERCEPT:
+            dx = self._ship.center_x - ship.center_x
+            dy = self._ship.center_y - ship.center_y
             angle = math.atan2(dy, dx)
-            bullet = EnemyBullet(
-                x=spawn_x,
-                y=spawn_y,
-                angle_rad=angle,
-                speed=self._cfg.combat.enemy_bullet_speed,
-                scale=self._cfg.sprite_scale,
-            )
-            self._enemy_bullet_list.append(bullet)
-        log.info(
-            "dock pressure spawn: %d enemy bullets from right edge",
-            _PRESSURE_WAVE_COUNT,
+        else:  # straight — fire forward, right-to-left
+            angle = math.pi
+        bullet = EnemyBullet(
+            x=ship.center_x,
+            y=ship.center_y,
+            angle_rad=angle,
+            speed=self._cfg.combat.enemy_bullet_speed,
+            scale=self._cfg.sprite_scale,
         )
+        self._enemy_bullet_list.append(bullet)
+        self._play_sfx(self._sm_enemy_shoot, self._snd_enemy_shoot)
 
     # ---- power-ups -------------------------------------------------
 
@@ -1031,6 +1190,17 @@ class RunLevelView(arcade.View):
             if bullet.center_x > right_limit:
                 bullet.remove_from_sprite_lists()
 
+    def _is_on_screen(self, world_x: float) -> bool:
+        """True if a world-X column is within the visible camera band.
+
+        Stationary enemies only fire / activate while on screen, so the
+        player never takes shots from turrets they can't see.  In-flight
+        projectiles are unaffected — they move and cull independently.
+        """
+        sw = self.window.width
+        cam_left = self.window.world_camera.position.x - sw / 2.0
+        return cam_left <= world_x <= cam_left + sw
+
     def _update_missiles(self, delta_time: float) -> None:
         """Fire from proximity-triggered silos, then move + cull missiles."""
         assert self._terrain_cfg is not None
@@ -1039,6 +1209,8 @@ class RunLevelView(arcade.View):
 
         for silo in self._silos:
             if not silo.is_alive:
+                continue
+            if not self._is_on_screen(silo.center_x):
                 continue
             if silo.check_proximity(self._ship.center_x, self._ship.center_y):
                 direction = -1.0 if silo.surface == "ceiling" else 1.0
@@ -1076,6 +1248,8 @@ class RunLevelView(arcade.View):
         for turret in self._turrets:
             if not turret.is_alive:
                 continue
+            if not self._is_on_screen(turret.base.center_x):
+                continue
             if turret.update(self._ship.center_x, self._ship.center_y, delta_time):
                 bullet = turret.fire_bullet(
                     self._cfg.combat.enemy_bullet_speed,
@@ -1094,6 +1268,67 @@ class RunLevelView(arcade.View):
                 or bullet.center_y > world_h + cull
             ):
                 bullet.remove_from_sprite_lists()
+
+    def _update_laser_turrets(self, delta_time: float) -> None:
+        """Tick each laser turret; apply beam damage on the FIRING frame."""
+        for lt in self._laser_turrets:
+            if not lt.is_alive:
+                continue
+            if not self._is_on_screen(lt.base.center_x):
+                continue
+            state = lt.update(self._ship.center_x, self._ship.center_y, delta_time)
+            # Apply damage on the first frame of the FIRING state.
+            if state == "firing" and not lt._damage_dealt:
+                lt._damage_dealt = True
+                if self._ship_in_laser_beam(lt):
+                    self._damage_player(self._cfg.combat.laser_beam_damage)
+                    if self._death_timer > 0.0:
+                        return
+
+    def _ship_in_laser_beam(self, lt: LaserTurret) -> bool:
+        """True if the ship center is within beam_width/2 of the laser line."""
+        import math
+
+        x0, y0 = lt.barrel.center_x, lt.barrel.center_y
+        x1, y1 = lt.beam_end()
+        px, py = self._ship.center_x, self._ship.center_y
+        # Perpendicular distance from point to line segment.
+        dx, dy = x1 - x0, y1 - y0
+        length_sq = dx * dx + dy * dy
+        if length_sq == 0:
+            return False
+        t = max(0.0, min(1.0, ((px - x0) * dx + (py - y0) * dy) / length_sq))
+        closest_x = x0 + t * dx
+        closest_y = y0 + t * dy
+        dist = math.hypot(px - closest_x, py - closest_y)
+        half_w = (self._cfg.combat.laser_beam_width / 2.0) + self._ship.width / 4.0
+        return dist <= half_w
+
+    def _draw_laser_beams(self) -> None:
+        """Immediate-mode beam lines in world-camera space (ephemeral)."""
+        cfg = self._cfg.combat
+        for lt in self._laser_turrets:
+            if not lt.is_alive:
+                continue
+            if not self._is_on_screen(lt.base.center_x):
+                continue
+            if lt.is_telegraphing:
+                color = tuple(cfg.laser_telegraph_color)
+                width = max(1, int(cfg.laser_beam_width * 0.5))
+            elif lt.is_firing:
+                color = tuple(cfg.laser_beam_color)
+                width = int(cfg.laser_beam_width)
+            else:
+                continue
+            end_x, end_y = lt.beam_end()
+            arcade.draw_line(
+                lt.barrel.center_x,
+                lt.barrel.center_y,
+                end_x,
+                end_y,
+                color,
+                width,
+            )
 
     def _check_combat_collisions(self) -> None:
         """Frame-staggered collision detection.
@@ -1127,6 +1362,32 @@ class RunLevelView(arcade.View):
                 if turret is not None and turret.take_damage(damage):
                     self._on_turret_destroyed(turret)
 
+        # vs patrol ships
+        for bullet in list(self._bullet_list):
+            if not bullet.sprite_lists:
+                continue
+            hits = arcade.check_for_collision_with_list(bullet, self._patrol_list)
+            if hits:
+                bullet.remove_from_sprite_lists()
+                patrol = hits[0]
+                assert isinstance(patrol, PatrolShip)
+                if patrol.take_damage(damage):
+                    self._on_patrol_destroyed(patrol)
+
+        # vs laser turret bases
+        for bullet in list(self._bullet_list):
+            if not bullet.sprite_lists:
+                continue
+            hits = arcade.check_for_collision_with_list(bullet, self._laser_base_list)
+            if hits:
+                bullet.remove_from_sprite_lists()
+                base_sprite = hits[0]
+                lt = next(
+                    (t for t in self._laser_turrets if t.base is base_sprite), None
+                )
+                if lt is not None and lt.take_damage(damage):
+                    self._on_laser_turret_destroyed(lt)
+
     def _check_enemy_hits(self) -> None:
         if not self._ship.is_alive or self._ship.is_docked:
             # While docked the brief still allows damage in theory, but
@@ -1147,6 +1408,18 @@ class RunLevelView(arcade.View):
         for bullet in bullet_hits:
             bullet.remove_from_sprite_lists()
             self._damage_player(1)
+            if self._death_timer > 0.0:
+                return
+        # Patrol ship ram — destroys the patrol, damages the player.
+        patrol_hits = arcade.check_for_collision_with_list(
+            self._ship, self._patrol_list
+        )
+        for patrol in patrol_hits:
+            assert isinstance(patrol, PatrolShip)
+            patrol.remove_from_sprite_lists()
+            if patrol in self._patrols:
+                self._patrols.remove(patrol)
+            self._damage_player(self._cfg.combat.patrol_ram_damage)
             if self._death_timer > 0.0:
                 return
 
@@ -1193,6 +1466,38 @@ class RunLevelView(arcade.View):
         turret.base.remove_from_sprite_lists()
         turret.barrel.remove_from_sprite_lists()
         self._score += 150
+        self._play_sfx(self._sm_enemy_boom, self._snd_enemy_boom)
+
+    def _explode_patrol(self, patrol: PatrolShip) -> None:
+        """Spawn the explosion + remove the patrol (no score).  Shared by
+        player-kill and terrain-contact paths.
+        """
+        explosion = ExplosionSprite(
+            x=patrol.center_x,
+            y=patrol.center_y,
+            scale=max(1.0, self._cfg.sprite_scale * 2.0),
+        )
+        self._explosion_list.append(explosion)
+        patrol.remove_from_sprite_lists()
+        if patrol in self._patrols:
+            self._patrols.remove(patrol)
+        self._play_sfx(self._sm_enemy_boom, self._snd_enemy_boom)
+
+    def _on_patrol_destroyed(self, patrol: PatrolShip) -> None:
+        """Player destroyed the patrol — explode and award score."""
+        self._explode_patrol(patrol)
+        self._score += 200
+
+    def _on_laser_turret_destroyed(self, lt: LaserTurret) -> None:
+        explosion = ExplosionSprite(
+            x=lt.base.center_x,
+            y=lt.base.center_y,
+            scale=max(1.0, self._cfg.sprite_scale * 2.0),
+        )
+        self._explosion_list.append(explosion)
+        lt.base.remove_from_sprite_lists()
+        lt.barrel.remove_from_sprite_lists()
+        self._score += 250
         self._play_sfx(self._sm_enemy_boom, self._snd_enemy_boom)
 
     def _play_sfx(self, sm: SoundManager, sound: arcade.Sound) -> None:

@@ -530,6 +530,98 @@ the power-up spawner.
 
 ---
 
+## Enemies — Phase 6 additions (Base Attackers specific)
+
+### PatrolShip
+- `src/base_attackers/enemies/patrol_ship.py`.  A single `arcade.Sprite`
+  (NOT composite); lives in `RunLevelView._patrol_list` + `_patrols`.
+- Three behaviours selected at spawn and immutable for life:
+  `BEHAVIOUR_STRAIGHT` / `BEHAVIOUR_INTERCEPT` / `BEHAVIOUR_KAMIKAZE`.
+  `_pick_patrol_behaviour()` weights them by `_level_num` (more
+  kamikazes at higher levels).
+- `update_patrol(ship_x, ship_y, dt, terrain)` sets velocity by
+  behaviour, applies reactive terrain avoidance, ticks the fire
+  cooldown, steps position (mutates `center_x/center_y` directly), then
+  rotates the sprite to face its travel heading.  The `terrain` arg is
+  passed at update time (not `__init__`), so the class is still
+  constructible without terrain.
+- **Facing**: rotated every frame to point along velocity via
+  `angle = _NATURAL_BEARING_DEG - degrees(atan2(vy, vx))` (clockwise-
+  positive, same convention as `GunTurret`).  `_NATURAL_BEARING_DEG =
+  270.0` because Kenney enemy art is nose-down at angle 0.  Flip this one
+  constant by 180 if a swapped sprite points the opposite way.
+- **Terrain avoidance** (`_avoid_terrain`): reactive only — samples
+  floor/ceiling at the current X and a short lookahead in the travel
+  direction; within `_AVOID_MARGIN` of a surface it overrides `_vy` to
+  climb/dive, otherwise leaves the behaviour velocity alone (so the
+  mission resumes automatically once clear).  NOT path-planning; a ship
+  that still contacts terrain explodes.
+- **Terrain contact**: `_update_patrol_ships` checks
+  `terrain.point_in_terrain(center)` each frame and routes a hit through
+  `_explode_patrol` (explosion + SFX, **no score** — distinct from
+  `_on_patrol_destroyed`, the player-kill path that adds +200).
+- **Firing** (`_fire_patrol_bullet`): non-kamikaze only, gated to
+  on-screen, on `patrol_fire_cooldown`.  Straight ships fire forward
+  (left, angle π); intercept ships aim at the player's current position.
+  Bullets go into the shared `_enemy_bullet_list`.  `ship.try_fire()`
+  consumes the cooldown; `ship.fires` is False for kamikazes.
+- **Spawning**: autonomous `patrol_spawn_interval` timer in `on_update`
+  (`_patrol_spawn_timer`, seeded short) calls `_spawn_patrol_ship()`;
+  dock-pressure spawns an intercept patrol on top of that.  The
+  power-up `spawn_interval_*` keys are unrelated to enemy spawning.
+- Culled in `_update_patrol_ships` when off the left/right/top/bottom
+  world edges by `bullet_cull_margin`.  Kamikazes never exit left —
+  they only die on player contact, player bullets, terrain, or drifting
+  off top/bottom.
+- Sprite map: straight=`enemyBlack2.png`, intercept=`enemyBlue3.png`,
+  kamikaze=`enemyRed1.png`.
+
+### LaserTurret
+- `src/base_attackers/enemies/laser_turret.py`.  Composite like
+  `GunTurret` — two SpriteLists (`_laser_base_list`,
+  `_laser_barrel_list`).  `position_on_terrain()` MUST be called after
+  construction (same two-step pattern as `GunTurret`/`FuelTower`).
+- Parts: base `turretBase_big.png`, barrel `gun09.png`.
+- State machine `idle → telegraph → firing → cooldown`.  `update()`
+  returns the current state name.  Barrel tracks the player at
+  `turret_rotation_speed * 0.5` (slower than a gun turret).
+- The beam is drawn with `arcade.draw_line()` in world-camera space —
+  NOT a sprite, NOT `ShapeElementList`.  Acceptable because it lasts
+  < 0.7s total; no per-frame GPU buffer allocation of consequence.
+- `_damage_dealt` flag prevents multiple damage applications during the
+  FIRING window; reset on each telegraph→firing transition.  Damage is
+  applied once, on the first FIRING frame, via `_ship_in_laser_beam`
+  (point-to-segment distance) → `_damage_player` (shield-aware).
+- Laser colours are `list[int]` RGBA in `[combat]`
+  (`laser_beam_color`, `laser_telegraph_color`), parsed as lists into
+  `CombatSettings` with `field(default_factory=...)` and converted to
+  `tuple(...)` only at draw time in `_draw_laser_beams()`.
+
+### Dock pressure
+- `_on_dock_pressure_spawn()` now spawns a single intercept
+  `PatrolShip` (replacing the Phase 4 enemy-bullet wave).  Phase 9 may
+  tune behaviour weighting.
+
+### Ceiling variants
+- Ceiling-mounted silo/gun-turret/laser-turret require
+  `ceiling_present = true` in the active level config; placement code
+  silently skips any position whose `ceiling_y_at()` returns `None`.
+  `[level_2]` enables the ceiling for Phase 6 playtesting.
+
+### On-screen firing gate
+- `RunLevelView._is_on_screen(world_x)` (within the camera's horizontal
+  band) gates *activation*: silos check proximity, gun turrets
+  rotate/fire, laser turrets telegraph/fire, and patrols fire only while
+  on screen — the player never takes shots from enemies they can't see.
+  `_draw_laser_beams` is gated too, so a turret frozen mid-telegraph as
+  it scrolls off-screen can't render a stray beam into view.  In-flight
+  projectiles move and cull independently of this gate.
+
+### Score values
+- silo = 100, gun turret = 150, patrol = 200, laser turret = 250.
+
+---
+
 ## Collision detection performance
 - Terrain collision: O(1) via corridor profile — check every frame, fine
 - Player bullets vs enemies: check every frame (must feel responsive)

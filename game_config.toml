@@ -1,5 +1,5 @@
 [game]
-starting_level = 2
+starting_level = 3
 num_lives = 6
 music_volume = 80
 effects_volume = 80
@@ -56,6 +56,27 @@ silo_hp = 2
 turret_hp = 3
 bullet_cull_margin = 64.0
 
+# Patrol ships
+patrol_hp = 2
+patrol_speed_min = 150.0        # px/s — straight pass
+patrol_speed_max = 280.0        # px/s — kamikaze
+patrol_intercept_lead = 0.6     # fraction of ship velocity added to aim
+patrol_ram_damage = 1           # HP lost when patrol ship contacts player
+patrol_spawn_margin = 60.0      # px off right edge of camera on spawn
+patrol_spawn_interval = 6.0     # seconds between autonomous patrol spawns
+patrol_fire_cooldown = 2.5      # seconds between patrol shots (non-kamikaze)
+
+# Laser turrets
+laser_turret_hp = 4
+laser_turret_fire_cooldown = 3.5
+laser_telegraph_duration = 0.6  # seconds warning beam is visible
+laser_beam_duration = 0.12      # seconds full beam is visible
+laser_beam_damage = 1           # HP per beam hit
+laser_beam_width = 3.0          # px line width for draw call
+laser_proximity_trigger = 260.0  # px — turret activates when ship is within
+laser_beam_color = [255, 60, 60, 220]   # RGBA
+laser_telegraph_color = [255, 180, 60, 120]   # RGBA dim orange
+
 [terrain]
 chunk_width = 64
 cull_buffer_chunks = 3
@@ -65,6 +86,7 @@ fall_speed_min = 40.0
 fall_speed_max = 100.0
 
 # Spawn interval per level (seconds). Higher levels = more frequent.
+# Original values
 spawn_interval_level_1 = 20.0
 spawn_interval_level_2 = 14.0
 spawn_interval_level_3 = 10.0
@@ -132,4 +154,14 @@ terrain_frequency = 0.008
 terrain_half_width = 280.0
 ceiling_present = true
 terrain_renderer = "polygon"
+terrain_seed = 0
+
+[level_3]
+world_width = 6400
+world_height = 720
+terrain_amplitude = 90.0
+terrain_frequency = 0.01
+terrain_half_width = 250.0
+ceiling_present = true
+terrain_renderer = "tile"
 terrain_seed = 0

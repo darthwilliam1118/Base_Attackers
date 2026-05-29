@@ -57,6 +57,27 @@ class CombatSettings:
     silo_hp: int = 2
     turret_hp: int = 3
     bullet_cull_margin: float = 64.0
+    # Patrol ships
+    patrol_hp: int = 2
+    patrol_speed_min: float = 150.0
+    patrol_speed_max: float = 280.0
+    patrol_intercept_lead: float = 0.6
+    patrol_ram_damage: int = 1
+    patrol_spawn_margin: float = 60.0
+    patrol_spawn_interval: float = 6.0  # seconds between autonomous spawns
+    patrol_fire_cooldown: float = 2.5  # seconds between patrol shots (non-kamikaze)
+    # Laser turrets
+    laser_turret_hp: int = 4
+    laser_turret_fire_cooldown: float = 3.5
+    laser_telegraph_duration: float = 0.6
+    laser_beam_duration: float = 0.12
+    laser_beam_damage: int = 1
+    laser_beam_width: float = 3.0
+    laser_proximity_trigger: float = 260.0
+    laser_beam_color: list[int] = field(default_factory=lambda: [255, 60, 60, 220])
+    laser_telegraph_color: list[int] = field(
+        default_factory=lambda: [255, 180, 60, 120]
+    )
 
 
 @dataclass
@@ -236,6 +257,76 @@ class GameConfig(BaseGameConfig):
             turret_hp=int(combat_raw.get("turret_hp", CombatSettings.turret_hp)),
             bullet_cull_margin=float(
                 combat_raw.get("bullet_cull_margin", CombatSettings.bullet_cull_margin)
+            ),
+            patrol_hp=int(combat_raw.get("patrol_hp", CombatSettings.patrol_hp)),
+            patrol_speed_min=float(
+                combat_raw.get("patrol_speed_min", CombatSettings.patrol_speed_min)
+            ),
+            patrol_speed_max=float(
+                combat_raw.get("patrol_speed_max", CombatSettings.patrol_speed_max)
+            ),
+            patrol_intercept_lead=float(
+                combat_raw.get(
+                    "patrol_intercept_lead", CombatSettings.patrol_intercept_lead
+                )
+            ),
+            patrol_ram_damage=int(
+                combat_raw.get("patrol_ram_damage", CombatSettings.patrol_ram_damage)
+            ),
+            patrol_spawn_margin=float(
+                combat_raw.get(
+                    "patrol_spawn_margin", CombatSettings.patrol_spawn_margin
+                )
+            ),
+            patrol_spawn_interval=float(
+                combat_raw.get(
+                    "patrol_spawn_interval", CombatSettings.patrol_spawn_interval
+                )
+            ),
+            patrol_fire_cooldown=float(
+                combat_raw.get(
+                    "patrol_fire_cooldown", CombatSettings.patrol_fire_cooldown
+                )
+            ),
+            laser_turret_hp=int(
+                combat_raw.get("laser_turret_hp", CombatSettings.laser_turret_hp)
+            ),
+            laser_turret_fire_cooldown=float(
+                combat_raw.get(
+                    "laser_turret_fire_cooldown",
+                    CombatSettings.laser_turret_fire_cooldown,
+                )
+            ),
+            laser_telegraph_duration=float(
+                combat_raw.get(
+                    "laser_telegraph_duration",
+                    CombatSettings.laser_telegraph_duration,
+                )
+            ),
+            laser_beam_duration=float(
+                combat_raw.get(
+                    "laser_beam_duration", CombatSettings.laser_beam_duration
+                )
+            ),
+            laser_beam_damage=int(
+                combat_raw.get("laser_beam_damage", CombatSettings.laser_beam_damage)
+            ),
+            laser_beam_width=float(
+                combat_raw.get("laser_beam_width", CombatSettings.laser_beam_width)
+            ),
+            laser_proximity_trigger=float(
+                combat_raw.get(
+                    "laser_proximity_trigger",
+                    CombatSettings.laser_proximity_trigger,
+                )
+            ),
+            laser_beam_color=list(
+                combat_raw.get("laser_beam_color", CombatSettings().laser_beam_color)
+            ),
+            laser_telegraph_color=list(
+                combat_raw.get(
+                    "laser_telegraph_color", CombatSettings().laser_telegraph_color
+                )
             ),
         )
         weights_raw = powerups_raw.get("weights", {})
