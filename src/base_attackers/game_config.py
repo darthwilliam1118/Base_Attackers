@@ -14,6 +14,19 @@ from agf.paths import writable_root
 
 
 @dataclass
+class WindowSettings:
+    """Explicit window dimensions.  agf's GameWindowBase sizes the window
+    from ``max_window_height`` at a fixed ~1.25 aspect; GameWindow
+    overrides it to these values so this horizontal scroller gets a wide
+    16:9 window instead of a near-square one.
+    """
+
+    width: int = 1422
+    height: int = 800
+    title: str = "Base Attackers"
+
+
+@dataclass
 class UIConfig:
     popup_duration: float = 0.8
     popup_rise_speed: float = 60.0
@@ -123,19 +136,75 @@ class LevelSettings:
     terrain_seed: int = 0  # 0 means random per run
 
 
+@dataclass
+class LevelGenSettings:
+    max_difficulty_level: int = 10
+    boss_zone_fraction: float = 0.85
+    entry_clear_fraction: float = 0.05
+    run_seed: int = 0  # 0 = random per game; non-zero = reproducible debug
+
+    tower_count_max: int = 4
+    tower_count_min: int = 2
+    tower_min_spacing: float = 800.0
+    tower_ceiling_unlock_level: int = 4
+
+    silo_density_min: float = 0.0003
+    silo_density_max: float = 0.0010
+    silo_min_spacing: float = 350.0
+    silo_ceiling_fraction_min: float = 0.0
+    silo_ceiling_fraction_max: float = 0.5
+    silo_unlock_level: int = 1
+
+    turret_density_min: float = 0.0002
+    turret_density_max: float = 0.0008
+    turret_min_spacing: float = 400.0
+    turret_ceiling_fraction_min: float = 0.0
+    turret_ceiling_fraction_max: float = 0.4
+    turret_unlock_level: int = 1
+
+    laser_density_min: float = 0.0
+    laser_density_max: float = 0.0004
+    laser_min_spacing: float = 600.0
+    laser_ceiling_fraction_min: float = 0.0
+    laser_ceiling_fraction_max: float = 0.3
+    laser_unlock_level: int = 3
+
+
 _LEVEL_SECTION_RE = re.compile(r"^level_(\d+)$")
 
 
 @dataclass
 class GameConfig(BaseGameConfig):
     background: BackgroundConfig = field(default_factory=BackgroundConfig)
+    window: WindowSettings = field(default_factory=WindowSettings)
     ui: UIConfig = field(default_factory=UIConfig)
     ship: ShipSettings = field(default_factory=ShipSettings)
     fuel_tower: FuelTowerSettings = field(default_factory=FuelTowerSettings)
     combat: CombatSettings = field(default_factory=CombatSettings)
     powerups: PowerUpSettings = field(default_factory=PowerUpSettings)
     terrain: TerrainSettings = field(default_factory=TerrainSettings)
+    level_gen: LevelGenSettings = field(default_factory=LevelGenSettings)
     levels: dict[int, LevelSettings] = field(default_factory=dict)
+
+    def level_settings_for(self, level_num: int) -> LevelSettings:
+        """Explicit ``[level_N]`` settings if configured, else generated
+        from the difficulty curve (infinite levels, no TOML entry needed).
+        """
+        if level_num in self.levels:
+            return self.levels[level_num]
+        from src.base_attackers.levels.level_generator import difficulty, lerp
+
+        d = difficulty(level_num, self.level_gen.max_difficulty_level)
+        return LevelSettings(
+            world_width=6400.0,
+            world_height=min(2160.0, lerp(720.0, 1440.0, d)),
+            terrain_amplitude=lerp(80.0, 190.0, d),
+            terrain_frequency=lerp(0.008, 0.016, d),
+            terrain_half_width=lerp(280.0, 155.0, d),
+            ceiling_present=(level_num >= 3),
+            terrain_renderer="polygon" if level_num % 2 == 0 else "tile",
+            terrain_seed=0,
+        )
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "GameConfig":
@@ -149,12 +218,14 @@ class GameConfig(BaseGameConfig):
 
         game = data.get("game", {})
         bg_raw = data.get("background", {})
+        window_raw = data.get("window", {})
         ui_raw = data.get("ui", {})
         ship_raw = data.get("ship", {})
         fuel_tower_raw = data.get("fuel_tower", {})
         combat_raw = data.get("combat", {})
         powerups_raw = data.get("powerups", {})
         terrain_raw = data.get("terrain", {})
+        level_gen_raw = data.get("level_gen", {})
 
         bg = BackgroundConfig(
             background_image=str(
@@ -167,6 +238,11 @@ class GameConfig(BaseGameConfig):
             star_speed_max=float(
                 bg_raw.get("star_speed_max", BackgroundConfig.star_speed_max)
             ),
+        )
+        window = WindowSettings(
+            width=int(window_raw.get("width", WindowSettings.width)),
+            height=int(window_raw.get("height", WindowSettings.height)),
+            title=str(window_raw.get("title", WindowSettings.title)),
         )
         ui = UIConfig(
             popup_duration=float(ui_raw.get("popup_duration", UIConfig.popup_duration)),
@@ -405,6 +481,99 @@ class GameConfig(BaseGameConfig):
                 )
             ),
         )
+        lg = LevelGenSettings
+        level_gen = LevelGenSettings(
+            max_difficulty_level=int(
+                level_gen_raw.get("max_difficulty_level", lg.max_difficulty_level)
+            ),
+            boss_zone_fraction=float(
+                level_gen_raw.get("boss_zone_fraction", lg.boss_zone_fraction)
+            ),
+            entry_clear_fraction=float(
+                level_gen_raw.get("entry_clear_fraction", lg.entry_clear_fraction)
+            ),
+            run_seed=int(level_gen_raw.get("run_seed", lg.run_seed)),
+            tower_count_max=int(
+                level_gen_raw.get("tower_count_max", lg.tower_count_max)
+            ),
+            tower_count_min=int(
+                level_gen_raw.get("tower_count_min", lg.tower_count_min)
+            ),
+            tower_min_spacing=float(
+                level_gen_raw.get("tower_min_spacing", lg.tower_min_spacing)
+            ),
+            tower_ceiling_unlock_level=int(
+                level_gen_raw.get(
+                    "tower_ceiling_unlock_level", lg.tower_ceiling_unlock_level
+                )
+            ),
+            silo_density_min=float(
+                level_gen_raw.get("silo_density_min", lg.silo_density_min)
+            ),
+            silo_density_max=float(
+                level_gen_raw.get("silo_density_max", lg.silo_density_max)
+            ),
+            silo_min_spacing=float(
+                level_gen_raw.get("silo_min_spacing", lg.silo_min_spacing)
+            ),
+            silo_ceiling_fraction_min=float(
+                level_gen_raw.get(
+                    "silo_ceiling_fraction_min", lg.silo_ceiling_fraction_min
+                )
+            ),
+            silo_ceiling_fraction_max=float(
+                level_gen_raw.get(
+                    "silo_ceiling_fraction_max", lg.silo_ceiling_fraction_max
+                )
+            ),
+            silo_unlock_level=int(
+                level_gen_raw.get("silo_unlock_level", lg.silo_unlock_level)
+            ),
+            turret_density_min=float(
+                level_gen_raw.get("turret_density_min", lg.turret_density_min)
+            ),
+            turret_density_max=float(
+                level_gen_raw.get("turret_density_max", lg.turret_density_max)
+            ),
+            turret_min_spacing=float(
+                level_gen_raw.get("turret_min_spacing", lg.turret_min_spacing)
+            ),
+            turret_ceiling_fraction_min=float(
+                level_gen_raw.get(
+                    "turret_ceiling_fraction_min", lg.turret_ceiling_fraction_min
+                )
+            ),
+            turret_ceiling_fraction_max=float(
+                level_gen_raw.get(
+                    "turret_ceiling_fraction_max", lg.turret_ceiling_fraction_max
+                )
+            ),
+            turret_unlock_level=int(
+                level_gen_raw.get("turret_unlock_level", lg.turret_unlock_level)
+            ),
+            laser_density_min=float(
+                level_gen_raw.get("laser_density_min", lg.laser_density_min)
+            ),
+            laser_density_max=float(
+                level_gen_raw.get("laser_density_max", lg.laser_density_max)
+            ),
+            laser_min_spacing=float(
+                level_gen_raw.get("laser_min_spacing", lg.laser_min_spacing)
+            ),
+            laser_ceiling_fraction_min=float(
+                level_gen_raw.get(
+                    "laser_ceiling_fraction_min", lg.laser_ceiling_fraction_min
+                )
+            ),
+            laser_ceiling_fraction_max=float(
+                level_gen_raw.get(
+                    "laser_ceiling_fraction_max", lg.laser_ceiling_fraction_max
+                )
+            ),
+            laser_unlock_level=int(
+                level_gen_raw.get("laser_unlock_level", lg.laser_unlock_level)
+            ),
+        )
 
         levels: dict[int, LevelSettings] = {}
         for key, raw in data.items():
@@ -443,12 +612,14 @@ class GameConfig(BaseGameConfig):
             max_window_height=int(game.get("max_window_height", cls.max_window_height)),
             sprite_scale=float(game.get("sprite_scale", cls.sprite_scale)),
             background=bg,
+            window=window,
             ui=ui,
             ship=ship,
             fuel_tower=fuel_tower,
             combat=combat,
             powerups=powerups,
             terrain=terrain,
+            level_gen=level_gen,
             levels=levels,
         )
 

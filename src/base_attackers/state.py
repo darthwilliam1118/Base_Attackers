@@ -66,12 +66,22 @@ class GameStateManager(BaseGameStateManager):
                 arcade.exit()
 
     def _handle_game_init(self) -> None:
+        import random
+
         from agf.player_state import PlayerState
         from src.base_attackers.game_config import GameConfig
 
         cfg = self.context.get("config") or GameConfig.load()
         num_players = self.context.get("num_players", 1)
         self.context["config"] = cfg
+        # Per-game seed: a fixed non-zero config value reproduces the same
+        # maps every game (debugging); 0 picks a fresh random seed so each
+        # game is unique.  It persists across respawns/level transitions
+        # (only re-rolled here on a new game), so respawning a level
+        # regenerates the identical layout.
+        self.context["run_seed"] = cfg.level_gen.run_seed or random.randrange(
+            1, 2**31 - 1
+        )
         self.context["players"] = [
             PlayerState(
                 player_num=i + 1,

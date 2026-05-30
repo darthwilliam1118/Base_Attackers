@@ -424,11 +424,11 @@ pickup calls `ship.add_fuel(cfg.ship.fuel_canister_restore)` and
 `canister.remove_from_sprite_lists()`.  Phase 5 will replace these
 with the proper power-up spawner.
 
-### Hardcoded placement (Phase 3 only)
-Tower positions live in `_PHASE3_TOWER_POSITIONS` and canister
-positions in `_PHASE3_CANISTER_POSITIONS` at the top of `run_level.py`.
-Phase 7 moves towers into level config; Phase 5 moves canisters into
-the power-up spawner.
+### Placement (towers, silos, turrets, lasers)
+As of Phase 7 there are NO hardcoded position constants.  Tower / silo /
+turret / laser positions come from `LevelGenerator` (see "Level
+generation & flow"); canisters were absorbed into the power-up spawner
+in Phase 5.  Do not re-add `_PHASE*_*_POSITIONS` lists.
 
 ### Ship destruction sequence
 - `_destroy_ship()` spawns an `agf.sprites.explosion.ExplosionSprite`
@@ -470,14 +470,22 @@ the power-up spawner.
   camera scrolls; the full profile is always in memory
 - Tile renderer uses SpriteList with spatial_hash=True (tiles never move)
 - Polygon renderer uses immediate-mode draw calls — NOT ShapeElementList
-- **Tile renderer overrides `floor_y_at`** to return the *visible* tile
-  top (`ceil(raw_floor_y / chunk_width) * chunk_width`) rather than the
-  raw corridor profile value. This keeps `point_in_terrain` aligned
-  with what's actually drawn so the ship can't sink into a tile by up
-  to `chunk_width - 1` px before dying. The polygon renderer uses the
-  raw `floor_y` from the base class because its trapezoids reach
-  exactly to that value. Ceiling tiles already bottom out at
-  `ceiling_y` exactly, so `ceiling_y_at` doesn't need an override.
+- **Each renderer overrides the surface lookups to match what it draws**,
+  because the base-class `floor_y_at`/`ceiling_y_at` return the *step*
+  value at the chunk's left edge:
+    - **Tile renderer** overrides `floor_y_at` to return the *visible*
+      tile top (`ceil(raw_floor_y / chunk_width) * chunk_width`). Its
+      terrain is step-rendered per column, so the base (step)
+      `ceiling_y_at` already matches the ceiling tiles' bottom — no
+      ceiling override needed.
+    - **Polygon renderer** overrides BOTH `floor_y_at` and `ceiling_y_at`
+      to **linearly interpolate** between adjacent chunk samples (via
+      `_bracket`). Its trapezoids draw sloped floor/ceiling edges, so a
+      step lookup diverges from the drawn edge by up to
+      `slope * chunk_width` — on steep higher-level terrain that's ~100px,
+      enough that the ship explodes well below the *visible* ceiling.
+      Interpolation makes `point_in_terrain` match the drawn slopes
+      exactly. Do NOT revert this to the base-class step lookup.
 - See docs/architecture-overview.md for full terrain design
 
 ---
@@ -525,8 +533,8 @@ the power-up spawner.
   second cleanup path — the death sequence is the single funnel.
 - Per-level weight table comes from
   `cfg.powerups.weight_table_for_level(level_num)`; empty dict ⇒ no
-  spawning.  Level 1 is intentionally empty.  `_level_num` is hardcoded
-  to 1 in `__init__` until Phase 7 wires it through state context.
+  spawning.  Level 1 is intentionally empty.  `_level_num` comes from the
+  active `PlayerState.current_level` (falling back to `cfg.starting_level`).
 
 ---
 
@@ -619,6 +627,70 @@ the power-up spawner.
 
 ### Score values
 - silo = 100, gun turret = 150, patrol = 200, laser turret = 250.
+
+---
+
+## Level generation & flow — Phase 7 additions (Base Attackers specific)
+
+### LevelGenerator
+- `src/base_attackers/levels/level_generator.py`.  Pure Python (no
+  arcade) — unit-testable without a display.  Module fns `difficulty`,
+  `lerp`, `derive_seed`; dataclasses `TowerPlacement`/`SiloPlacement`/
+  `TurretPlacement`/`LaserPlacement`/`LevelLayout`.
+- `LevelGenerator(cfg).generate(level_num, world_width, ceiling_present,
+  run_seed)` returns a `LevelLayout` of `(x, surface)` placements within
+  `[entry_clear_x, boss_zone_x]`.  Density/spacing/ceiling-fraction/
+  unlock-level all come from `cfg.level_gen` (`[level_gen]` TOML) and
+  lerp along the difficulty curve.  Towers are placed first; enemies
+  clear both each other and towers (`min_spacing`).
+
+### Seed model (procedural but stable on respawn)
+- `context["run_seed"]` is set ONCE per new game in
+  `GameStateManager._handle_game_init`: `cfg.level_gen.run_seed` if
+  non-zero (reproducible debugging), else a fresh random int.  It is NOT
+  re-rolled on respawn or level transition, so it persists for the whole
+  game.
+- Each level's seed = `derive_seed(run_seed, level_num)`, used for BOTH
+  terrain (`_build_terrain` seed override) and `LevelGenerator`.  Same
+  run_seed + level_num ⇒ identical map, so dying and respawning rebuilds
+  the exact same level; a new game (new run_seed) differs.
+- A level's explicit non-zero `terrain_seed` in `[level_N]` always wins
+  for that level's terrain shape (per-level pin), independent of run_seed.
+- `cfg.level_settings_for(n)` returns explicit `[level_N]` settings if
+  present, else procedural `LevelSettings` from the difficulty curve
+  (ceiling at level ≥ 3, renderer alternates tile/polygon). Infinite
+  levels need no TOML entry.
+
+### RunLevelView placement & flow
+- `on_show_view` builds terrain with the derived seed, calls
+  `LevelGenerator.generate`, stores `_boss_zone_x`, then
+  `_place_from_layout(layout)` (iterates the four lists into per-item
+  helpers `_place_tower/_place_silo/_place_turret/_place_laser` — the
+  Phase 8 boss reuses this pattern).
+- Boss zone: `_boss_triggered` single-fires when `ship.center_x >=
+  _boss_zone_x` → `_on_boss_zone_reached()` (Phase 7 placeholder →
+  level complete; Phase 8 replaces the body).
+- `_trigger_level_complete()` is the ONLY path to
+  `GameState.LEVEL_COMPLETE` (used by the boss hook and the Shift+E
+  debug shortcut).  It writes score to PlayerState then transitions; the
+  `current_level` increment lives in `LevelCompleteView._on_complete` —
+  do NOT increment in RunLevelView.
+
+### Lives, death, score
+- Death routes to `GameState.PLAYER_KILLED` (not GAME_OVER).
+  `PlayerKilledView` owns the lives decrement and the GAME_OVER-vs-
+  respawn branch; RunLevelView never touches `lives`.
+- Score is the player's running total: `_score` is seeded from
+  `PlayerState.score` in `__init__` and written back via
+  `_sync_score_to_player()` in `_destroy_ship` and
+  `_trigger_level_complete`.  HUD shows `LIVES` (from PlayerState) under
+  `SCORE`.
+
+### Music
+- `_start_level_music()` (called from `on_show_view`) plays
+  `agf.music.track_key_for_level(level_num)` — agf cycles its 6 bundled
+  tracks; `music.play` no-ops if already playing and stops the menu
+  track.  Pause/resume handled by the existing `P` handler.
 
 ---
 
@@ -716,6 +788,6 @@ Phase 2 to read `cfg.terrain` + `cfg.levels[1]` exactly like
 - Phase 4 — Weapons and enemies:  docs/features/phase-4-combat.md (TBD)
 - Phase 5 — Power-ups:            docs/features/phase-5-powerups.md (TBD)
 - Phase 6 — Enemy ships + lasers: docs/features/phase-6-enemies.md (TBD)
-- Phase 7 — Level structure:      docs/features/phase-7-levels.md (TBD)
+- Phase 7 — Level structure:      docs/features/phase-7-levels.md (done)
 - Phase 8 — Boss archetypes:      docs/features/phase-8-bosses.md (TBD)
 - Phase 9 — Polish + release:     docs/features/phase-9-polish.md (TBD)

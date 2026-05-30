@@ -37,6 +37,39 @@ class PolygonTerrainRenderer(TerrainBase):
         self._screen_width = screen_width
         self._active_indices: set[int] = set()
 
+    # ---- collision -------------------------------------------------
+    #
+    # The trapezoids are drawn with sloped top/bottom edges that
+    # interpolate linearly between adjacent chunk samples, so collision
+    # MUST interpolate too.  The base class returns the step value at the
+    # chunk's left edge; on steep terrain (high amplitude/frequency at
+    # higher levels) that diverges from the drawn edge by up to
+    # ``slope * chunk_width`` — enough that the ship explodes well below
+    # the visible ceiling.  These overrides match the rendered geometry
+    # exactly (the floor edge runs a.floor_y -> b.floor_y; the ceiling
+    # edge runs a.ceiling_y -> b.ceiling_y across each chunk pair).
+
+    def _bracket(self, world_x: float) -> tuple[CorridorSlice, CorridorSlice, float]:
+        cw = self.config.chunk_width
+        n = len(self.profile)
+        i = int(world_x // cw)
+        i = max(0, min(i, n - 2)) if n >= 2 else 0
+        a = self.profile[i]
+        b = self.profile[min(i + 1, n - 1)]
+        t = (world_x - a.x) / cw if cw else 0.0
+        t = max(0.0, min(1.0, t))
+        return a, b, t
+
+    def floor_y_at(self, world_x: float) -> float:
+        a, b, t = self._bracket(world_x)
+        return a.floor_y + (b.floor_y - a.floor_y) * t
+
+    def ceiling_y_at(self, world_x: float) -> float | None:
+        a, b, t = self._bracket(world_x)
+        if a.ceiling_y is None or b.ceiling_y is None:
+            return a.ceiling_y if a.ceiling_y is not None else b.ceiling_y
+        return a.ceiling_y + (b.ceiling_y - a.ceiling_y) * t
+
     # ---- public API ------------------------------------------------
 
     def update(self, camera_x: float) -> None:

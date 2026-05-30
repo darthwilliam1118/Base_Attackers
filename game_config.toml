@@ -1,5 +1,5 @@
 [game]
-starting_level = 3
+starting_level = 4
 num_lives = 6
 music_volume = 80
 effects_volume = 80
@@ -19,13 +19,15 @@ popup_duration = 0.8
 popup_rise_speed = 60.0
 
 [window]
-width = 1280
-height = 720
+# Authoritative window size (overrides agf's max_window_height-derived
+# square default).  Wide 16:9 for this horizontal scroller.
+width = 1422
+height = 800
 title = "Base Attackers"
 
 [ship]
-accel = 400.0
-friction = 0.25
+accel = 600.0
+friction = 0.20
 max_speed_x = 350.0
 max_speed_y = 300.0
 hp = 3
@@ -80,6 +82,42 @@ laser_telegraph_color = [255, 180, 60, 120]   # RGBA dim orange
 [terrain]
 chunk_width = 64
 cull_buffer_chunks = 3
+
+[level_gen]
+max_difficulty_level = 10      # level at which difficulty reaches 1.0
+boss_zone_fraction = 0.85      # world X fraction where boss zone starts
+entry_clear_fraction = 0.05    # first N% of world kept clear (entry zone)
+run_seed = 0                   # 0 = random per game; non-zero = reproducible
+
+# Fuel towers — guaranteed refuel points; count decreases with difficulty.
+tower_count_max = 4            # level 1
+tower_count_min = 2            # max difficulty
+tower_min_spacing = 800.0      # minimum px between towers
+tower_ceiling_unlock_level = 4 # level at which ceiling towers can appear
+
+# Missile silos
+silo_density_min = 0.0003      # silos per px of playfield at level 1
+silo_density_max = 0.0010      # silos per px at max difficulty
+silo_min_spacing = 350.0       # minimum px between any two silos
+silo_ceiling_fraction_min = 0.0
+silo_ceiling_fraction_max = 0.5
+silo_unlock_level = 1
+
+# Gun turrets
+turret_density_min = 0.0002
+turret_density_max = 0.0008
+turret_min_spacing = 400.0
+turret_ceiling_fraction_min = 0.0
+turret_ceiling_fraction_max = 0.4
+turret_unlock_level = 1
+
+# Laser turrets
+laser_density_min = 0.0
+laser_density_max = 0.0004
+laser_min_spacing = 600.0
+laser_ceiling_fraction_min = 0.0
+laser_ceiling_fraction_max = 0.3
+laser_unlock_level = 3         # not available until level 3
 
 [powerups]
 fall_speed_min = 40.0

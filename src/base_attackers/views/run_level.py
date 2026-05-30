@@ -40,6 +40,7 @@ from pyglet.math import Vec2
 from agf.paths import resource_path
 from agf.powerups import WorldSpacePowerUpSpawner
 from agf.powerups.powerup_sprite import PowerUpSprite
+from agf.music import track_key_for_level
 from agf.ships.momentum import MomentumConfig
 from agf.sound_manager import SoundManager
 from agf.sprites.explosion import ExplosionSprite
@@ -55,6 +56,11 @@ from src.base_attackers.enemies import (
     PatrolShip,
 )
 from src.base_attackers.game_config import GameConfig, LevelSettings
+from src.base_attackers.levels.level_generator import (
+    LevelGenerator,
+    LevelLayout,
+    derive_seed,
+)
 from src.base_attackers.powerups import BAPowerUpManager
 from src.base_attackers.ships import PlayerShip
 from src.base_attackers.sprites import ShieldSprite
@@ -81,9 +87,6 @@ _DEADZONE_RIGHT = 0.65
 _DEADZONE_TOP = 0.80
 _DEADZONE_BOTTOM = 0.20
 
-# Hardcoded for Phase 3 — Phase 7 moves these into level config.
-_PHASE3_TOWER_POSITIONS = [800.0, 2400.0, 4400.0]
-
 # Phase 5 power-up textures (effect_type -> asset path).  Registered with
 # PowerUpSprite once during RunLevelView.__init__.
 _POWERUP_TEXTURES: dict[str, str] = {
@@ -96,32 +99,6 @@ _POWERUP_TEXTURES: dict[str, str] = {
 }
 _POWERUP_FLASH_DURATION = 2.0
 _MULTI_SHOT_SPREAD_DEG = (-10.0, 0.0, 10.0)
-
-# Hardcoded for Phase 4 — Phase 7 moves these into level config.  Ceiling
-# variants (Phase 6) only appear when the active level has
-# ceiling_present = true; otherwise _place_* skips them silently.
-_PHASE4_SILO_POSITIONS: list[tuple[float, str]] = [
-    (1200.0, "floor"),
-    (2800.0, "floor"),
-    (4000.0, "floor"),
-    (2000.0, "ceiling"),
-    (4800.0, "ceiling"),
-]
-_PHASE4_TURRET_POSITIONS: list[tuple[float, str]] = [
-    (600.0, "floor"),
-    (1800.0, "floor"),
-    (3400.0, "floor"),
-    (5200.0, "floor"),
-    (2400.0, "ceiling"),
-]
-
-# Hardcoded for Phase 6 — Phase 7 moves these into level config.
-_PHASE6_LASER_POSITIONS: list[tuple[float, str]] = [
-    (1000.0, "floor"),
-    (3000.0, "floor"),
-    (5000.0, "floor"),
-    (3600.0, "ceiling"),
-]
 
 # SFX paths and SoundManager throttle limits.
 _SND_PLAYER_SHOOT = "assets/sounds/laserSmall_000.wav"
@@ -139,6 +116,12 @@ _DOCK_BLINK_PERIOD = 0.4
 # towers (chosen via tower.surface).
 _LIFTOFF_SPEED = 200.0
 _DOCK_COOLDOWN = 1.0
+
+# Height (px) of the solid HUD band at the top of the screen.  The HUD
+# text rows span sh-20 .. sh-80, so 80 px backs them all.  The mask is
+# clamped to at least this band so tall levels (world_height > window
+# height) still get a backdrop and never invert the draw rectangle.
+_HUD_BAND_HEIGHT = 80.0
 
 # HUD bar geometry (screen space; offsets from sh = window.height).
 # Bars are positioned to sit on the same row as their accompanying text
@@ -159,10 +142,22 @@ _TOWER_COLOR = (255, 160, 60)
 
 
 def _build_terrain(
-    cfg: GameConfig, level_cfg: LevelSettings, screen_w: int
+    cfg: GameConfig,
+    level_cfg: LevelSettings,
+    screen_w: int,
+    seed_override: int | None = None,
 ) -> tuple[TerrainBase, TerrainConfig]:
-    """Instantiate the configured renderer for *level_cfg*."""
-    seed = level_cfg.terrain_seed if level_cfg.terrain_seed != 0 else None
+    """Instantiate the configured renderer for *level_cfg*.
+
+    An explicit non-zero ``level_cfg.terrain_seed`` always wins (per-level
+    reproducible shape); otherwise ``seed_override`` (the per-game derived
+    level seed) is used so a level is identical across a respawn but varies
+    between games.  ``None`` means a random profile.
+    """
+    if level_cfg.terrain_seed != 0:
+        seed: int | None = level_cfg.terrain_seed
+    else:
+        seed = seed_override
     tcfg = TerrainConfig(
         world_width=level_cfg.world_width,
         world_height=level_cfg.world_height,
@@ -195,11 +190,18 @@ class RunLevelView(arcade.View):
             self._level_num: int = int(players[idx].current_level)
         else:
             self._level_num = int(cfg.starting_level)
-        self._level_cfg: LevelSettings = cfg.levels.get(
-            self._level_num, LevelSettings()
-        )
+        # Explicit [level_N] config if present, else procedural from the
+        # difficulty curve (infinite levels).
+        self._level_cfg: LevelSettings = cfg.level_settings_for(self._level_num)
+        # Per-level terrain/layout seed: stable across a respawn (run_seed
+        # + level_num both unchanged), random between games.
+        run_seed = int(manager.context.get("run_seed", 0))
+        self._level_seed: int = derive_seed(run_seed, self._level_num)
         self._held_keys: set[int] = set()
         self._min_camera_left: float = 0.0
+        # Boss zone (set from the layout in on_show_view).
+        self._boss_zone_x: float = 0.0
+        self._boss_triggered: bool = False
 
         # Terrain (built in on_show_view once window dims are known).
         self._terrain: TerrainBase | None = None
@@ -239,10 +241,13 @@ class RunLevelView(arcade.View):
         self._enemy_bullet_list = arcade.SpriteList()
         self._missile_list = arcade.SpriteList()
 
-        # Combat state.
+        # Combat state.  Score carries the player's running total across
+        # levels and respawns (persisted in PlayerState.score).
         self._fire_cooldown: float = 0.0
         self._collision_frame: int = 0
-        self._score: int = 0
+        self._score: int = (
+            int(players[idx].score) if players and 0 <= idx < len(players) else 0
+        )
         # Autonomous patrol-ship spawn cadence.  Seeded short so the first
         # enemy appears soon after the level starts.
         self._patrol_spawn_timer: float = 2.0
@@ -287,6 +292,7 @@ class RunLevelView(arcade.View):
         self._hud_fuel_label: arcade.Text | None = None
         self._hud_docked: arcade.Text | None = None
         self._hud_score: arcade.Text | None = None
+        self._hud_lives: arcade.Text | None = None
         self._hud_powerup_flash: arcade.Text | None = None
         self._hud_god_mode: arcade.Text | None = None
         self._hud_debug_hints: arcade.Text | None = None
@@ -313,18 +319,23 @@ class RunLevelView(arcade.View):
     def on_show_view(self) -> None:
         if self._terrain is None:
             self._terrain, self._terrain_cfg = _build_terrain(
-                self._cfg, self._level_cfg, self.window.width
+                self._cfg, self._level_cfg, self.window.width, self._level_seed
             )
             self._spawn_ship()
             self.window.world_camera.position = Vec2(
                 self.window.width / 2.0, self.window.height / 2.0
             )
             self._terrain.update(0.0)
-            self._place_fuel_towers()
-            self._place_missile_silos()
-            self._place_gun_turrets()
-            self._place_laser_turrets()
+            layout = LevelGenerator(self._cfg).generate(
+                level_num=self._level_num,
+                world_width=self._terrain_cfg.world_width,
+                ceiling_present=self._level_cfg.ceiling_present,
+                run_seed=self._level_seed,
+            )
+            self._boss_zone_x = layout.boss_zone_x
+            self._place_from_layout(layout)
             self._build_powerup_system()
+            self._start_level_music()
         if not self._hud_built:
             self._build_hud()
             self._hud_built = True
@@ -355,13 +366,15 @@ class RunLevelView(arcade.View):
             self._fire_cooldown = max(0.0, self._fire_cooldown - delta_time)
 
         # Death sequence — play out the explosion before transitioning.
+        # PlayerKilledView owns the lives decrement + GAME_OVER/respawn
+        # branch, so death always routes there.
         if self._death_timer > 0.0:
             self._death_timer -= delta_time
             self._explosion_list.update(delta_time)
             if self._death_timer <= 0.0:
                 from src.base_attackers.state import GameState
 
-                self._manager.transition(GameState.GAME_OVER)
+                self._manager.transition(GameState.PLAYER_KILLED)
             return
 
         # Normal flight movement (skipped if docked or fuel-empty).
@@ -384,6 +397,16 @@ class RunLevelView(arcade.View):
         self._update_camera()
         cam_left = self.window.world_camera.position.x - self.window.width / 2.0
         self._terrain.update(cam_left)
+
+        # Boss zone — single-fire when the ship reaches the reserved band.
+        if (
+            not self._boss_triggered
+            and self._boss_zone_x > 0.0
+            and self._ship.center_x >= self._boss_zone_x
+        ):
+            self._boss_triggered = True
+            self._on_boss_zone_reached()
+            return
 
         # Docking.
         self._check_docking()
@@ -520,12 +543,8 @@ class RunLevelView(arcade.View):
         self._cfg.god_mode = not self._cfg.god_mode
 
     def _debug_complete_level(self) -> None:
-        """Jump straight to LevelCompleteView, which increments the
-        active player's current_level and cycles back into RunLevelView.
-        """
-        from src.base_attackers.state import GameState
-
-        self._manager.transition(GameState.LEVEL_COMPLETE)
+        """Shift+E — finish the level via the same path as the boss zone."""
+        self._trigger_level_complete()
 
     def _debug_spawn_powerup(self) -> None:
         """Drop one uniformly-random power-up into the visible window.
@@ -689,6 +708,42 @@ class RunLevelView(arcade.View):
             cam_bottom + sh / 2.0,
         )
 
+    # ---- level flow ------------------------------------------------
+
+    def _on_boss_zone_reached(self) -> None:
+        """Phase 7: reaching the boss zone completes the level (boss
+        placeholder).  Phase 8 replaces this with the boss encounter.
+        """
+        log.info("Boss zone reached on level %d", self._level_num)
+        self._trigger_level_complete()
+
+    def _trigger_level_complete(self) -> None:
+        """Persist score, then hand off to LevelCompleteView.
+
+        The level increment lives in LevelCompleteView._on_complete — this
+        is the ONLY path into GameState.LEVEL_COMPLETE; do not transition
+        there directly from elsewhere.
+        """
+        from src.base_attackers.state import GameState
+
+        self._sync_score_to_player()
+        self._manager.transition(GameState.LEVEL_COMPLETE)
+
+    def _sync_score_to_player(self) -> None:
+        """Write the running score back into the active PlayerState so the
+        LevelComplete / GameOver / ScoreEntry views read the right value.
+        """
+        players = self._manager.context.get("players") or []
+        idx = self._manager.context.get("active_player_index", 0)
+        if players and 0 <= idx < len(players):
+            players[idx].score = self._score
+
+    def _start_level_music(self) -> None:
+        """Play this level's track (cycles agf's 6 bundled tracks).  No-op
+        if already playing; stops the menu track automatically.
+        """
+        self.window.music.play(track_key_for_level(self._level_num))
+
     def _on_terrain_collision(self) -> None:
         """Ship hit terrain — start the destruction sequence."""
         self._ship.hp = 0
@@ -698,10 +753,13 @@ class RunLevelView(arcade.View):
         """Spawn an explosion, hide the ship, and start the death timer.
 
         ``on_update`` ticks ``_death_timer`` down and transitions to
-        GAME_OVER once it expires.
+        PLAYER_KILLED once it expires (that view decrements lives and
+        routes to GAME_OVER or respawn).  Score is persisted here so the
+        downstream views read the final value; lives are NOT touched here.
         """
         if self._death_timer > 0.0:
             return  # already dying
+        self._sync_score_to_player()
         explosion = ExplosionSprite(
             x=self._ship.center_x,
             y=self._ship.center_y,
@@ -738,96 +796,98 @@ class RunLevelView(arcade.View):
 
     # ---- placement -------------------------------------------------
 
-    def _place_fuel_towers(self) -> None:
-        """Construct each FuelTower at a placeholder Y, then position it
-        using ``tower.height`` (only known after the texture loads)."""
+    def _place_from_layout(self, layout: "LevelLayout") -> None:
+        """Construct all terrain-mounted objects from a procedural layout.
+
+        Phase 8 boss spawns follow this same per-item-helper pattern.
+        """
+        for p in layout.towers:
+            self._place_tower(p.x, p.surface)
+        for p in layout.silos:
+            self._place_silo(p.x, p.surface)
+        for p in layout.turrets:
+            self._place_turret(p.x, p.surface)
+        for p in layout.lasers:
+            self._place_laser(p.x, p.surface)
+
+    def _place_tower(self, x: float, surface: str) -> None:
+        """Two-step construct + position (texture height known after load)."""
         assert self._terrain is not None
-        for x in _PHASE3_TOWER_POSITIONS:
-            # Step 1: construct at dummy y=0 so the texture loads.
-            tower = FuelTower(
-                world_x=x,
-                world_y=0.0,
-                surface="floor",
-                cfg=self._cfg.fuel_tower,
-                scale=1.0,
-            )
-            # Step 2: now tower.height is known — sit the base on the
-            # visible floor surface and put the dock just above the top.
+        tower = FuelTower(
+            world_x=x,
+            world_y=0.0,
+            surface=surface,
+            cfg=self._cfg.fuel_tower,
+            scale=1.0,
+        )
+        if surface == "floor":
             floor_y = self._terrain.floor_y_at(x)
             tower.center_y = floor_y + tower.height / 2.0
             tower.dock_y = tower.center_y + tower.height / 2.0 + 12.0
-            self._tower_list.append(tower)
-            self._towers.append(tower)
+        else:
+            ceil_y = self._terrain.ceiling_y_at(x)
+            if ceil_y is None:
+                return  # no ceiling at this x — skip
+            tower.center_y = ceil_y - tower.height / 2.0
+            tower.dock_y = tower.center_y - tower.height / 2.0 - 12.0
+        self._tower_list.append(tower)
+        self._towers.append(tower)
 
-    def _place_missile_silos(self) -> None:
-        """Construct each silo at a dummy y, then position using
-        ``silo.height`` once the texture has loaded (same safety
-        pattern as FuelTower).
-        """
+    def _place_silo(self, x: float, surface: str) -> None:
         assert self._terrain is not None
-        for x, surface in _PHASE4_SILO_POSITIONS:
-            silo = MissileSilo(
-                world_x=x,
-                surface=surface,
-                cfg=self._cfg.combat,
-                scale=self._cfg.sprite_scale,
-            )
-            if surface == "floor":
-                surface_y = self._terrain.floor_y_at(x)
-                silo.center_y = surface_y + silo.height / 2.0
-            else:
-                ceil_y = self._terrain.ceiling_y_at(x)
-                if ceil_y is None:
-                    continue  # no ceiling at this x — skip
-                silo.center_y = ceil_y - silo.height / 2.0
-            self._silo_list.append(silo)
-            self._silos.append(silo)
+        silo = MissileSilo(
+            world_x=x,
+            surface=surface,
+            cfg=self._cfg.combat,
+            scale=self._cfg.sprite_scale,
+        )
+        if surface == "floor":
+            silo.center_y = self._terrain.floor_y_at(x) + silo.height / 2.0
+        else:
+            ceil_y = self._terrain.ceiling_y_at(x)
+            if ceil_y is None:
+                return  # no ceiling at this x — skip
+            silo.center_y = ceil_y - silo.height / 2.0
+        self._silo_list.append(silo)
+        self._silos.append(silo)
 
-    def _place_gun_turrets(self) -> None:
-        """Construct each turret, then position via the composite's
-        own ``position_on_terrain`` helper.
-        """
+    def _place_turret(self, x: float, surface: str) -> None:
         assert self._terrain is not None
-        for x, surface in _PHASE4_TURRET_POSITIONS:
-            if surface == "floor":
-                surface_y: float | None = self._terrain.floor_y_at(x)
-            else:
-                surface_y = self._terrain.ceiling_y_at(x)
-                if surface_y is None:
-                    continue
-            turret = GunTurret(
-                world_x=x,
-                surface=surface,
-                cfg=self._cfg.combat,
-                scale=self._cfg.sprite_scale,
-            )
-            turret.position_on_terrain(surface_y)
-            self._turret_base_list.append(turret.base)
-            self._turret_barrel_list.append(turret.barrel)
-            self._turrets.append(turret)
+        if surface == "floor":
+            surface_y: float | None = self._terrain.floor_y_at(x)
+        else:
+            surface_y = self._terrain.ceiling_y_at(x)
+            if surface_y is None:
+                return
+        turret = GunTurret(
+            world_x=x,
+            surface=surface,
+            cfg=self._cfg.combat,
+            scale=self._cfg.sprite_scale,
+        )
+        turret.position_on_terrain(surface_y)
+        self._turret_base_list.append(turret.base)
+        self._turret_barrel_list.append(turret.barrel)
+        self._turrets.append(turret)
 
-    def _place_laser_turrets(self) -> None:
-        """Construct each laser turret, then position via the composite's
-        own ``position_on_terrain`` helper (same pattern as GunTurret).
-        """
+    def _place_laser(self, x: float, surface: str) -> None:
         assert self._terrain is not None
-        for x, surface in _PHASE6_LASER_POSITIONS:
-            if surface == "floor":
-                surface_y: float | None = self._terrain.floor_y_at(x)
-            else:
-                surface_y = self._terrain.ceiling_y_at(x)
-                if surface_y is None:
-                    continue
-            lt = LaserTurret(
-                world_x=x,
-                surface=surface,
-                cfg=self._cfg.combat,
-                scale=self._cfg.sprite_scale,
-            )
-            lt.position_on_terrain(surface_y)
-            self._laser_base_list.append(lt.base)
-            self._laser_barrel_list.append(lt.barrel)
-            self._laser_turrets.append(lt)
+        if surface == "floor":
+            surface_y: float | None = self._terrain.floor_y_at(x)
+        else:
+            surface_y = self._terrain.ceiling_y_at(x)
+            if surface_y is None:
+                return
+        lt = LaserTurret(
+            world_x=x,
+            surface=surface,
+            cfg=self._cfg.combat,
+            scale=self._cfg.sprite_scale,
+        )
+        lt.position_on_terrain(surface_y)
+        self._laser_base_list.append(lt.base)
+        self._laser_barrel_list.append(lt.barrel)
+        self._laser_turrets.append(lt)
 
     # ---- docking ---------------------------------------------------
 
@@ -1535,6 +1595,7 @@ class RunLevelView(arcade.View):
             color=arcade.color.YELLOW,
         )
         self._hud_score = arcade.Text("SCORE  0", sw - 200, sh - 20, **common)
+        self._hud_lives = arcade.Text("LIVES 0", sw - 200, sh - 40, **common)
         self._hud_powerup_flash = arcade.Text(
             "",
             sw / 2,
@@ -1600,6 +1661,11 @@ class RunLevelView(arcade.View):
         self._hud_fuel_label.text = f"FUEL {self._ship.fuel:.0f}"
         if self._hud_score is not None:
             self._hud_score.text = f"SCORE  {self._score}"
+        if self._hud_lives is not None:
+            players = self._manager.context.get("players") or []
+            idx = self._manager.context.get("active_player_index", 0)
+            lives = players[idx].lives if players and 0 <= idx < len(players) else 0
+            self._hud_lives.text = f"LIVES {lives}"
         if self._hud_powerup_flash is not None:
             self._hud_powerup_flash.text = self._powerup_flash_label
 
@@ -1610,8 +1676,11 @@ class RunLevelView(arcade.View):
         cam_bottom = self.window.world_camera.position.y - sh / 2.0
         # Screen-Y at which the world ceiling sits — everything above is
         # the HUD area and is masked solid black so the tile renderer's
-        # ceiling overstack stays hidden.
+        # ceiling overstack stays hidden.  Clamp to a fixed band so tall
+        # levels (world_height > window height) still back the HUD and
+        # never feed bottom > top into draw_lrbt_rectangle_filled.
         hud_bottom = float(self._terrain_cfg.world_height) - cam_bottom
+        hud_bottom = max(0.0, min(hud_bottom, float(sh) - _HUD_BAND_HEIGHT))
         arcade.draw_lrbt_rectangle_filled(
             0.0, float(sw), hud_bottom, float(sh), arcade.color.BLACK
         )
@@ -1667,6 +1736,8 @@ class RunLevelView(arcade.View):
             self._hud_fuel_label.draw()
         if self._hud_score:
             self._hud_score.draw()
+        if self._hud_lives:
+            self._hud_lives.draw()
         if self._hud_docked and self._ship.is_docked and self._dock_blink_visible:
             self._hud_docked.draw()
         if self._hud_powerup_flash and self._powerup_flash_label:
