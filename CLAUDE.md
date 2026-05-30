@@ -700,6 +700,16 @@ in Phase 5.  Do not re-add `_PHASE*_*_POSITIONS` lists.
 - Enemy bullets vs player: check every 2 frames (% 2 == 0)
 - Enemy contact vs player: check every 3 frames
 - Cull off-screen bullets immediately in the same frame they exit
+- Projectiles also cull on terrain contact (`point_in_terrain`) each
+  frame they move — player bullets, enemy bullets, and missiles alike.
+  A missile that hits terrain re-arms its owning silo, same as the
+  off-world path.
+- Enemy bullets additionally expire after `cfg.combat.enemy_bullet_lifetime`
+  (default 3 s) via `EnemyBullet.expired`, so a stray shot that never hits
+  terrain or leaves the world still disappears.  Lifetime is threaded in
+  at construction (`GunTurret.fire_bullet`, `_fire_patrol_bullet`).
+- Enemy firing is gated to on-screen enemies (`_is_on_screen`), so no
+  bullets originate off-screen — see the "On-screen firing gate" note.
 - Use `hit_box_algorithm=arcade.hitbox.algo_simple` for bullets —
   pixel-perfect hitboxes add cost with no gameplay benefit for small
   fast projectiles

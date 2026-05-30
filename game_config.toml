@@ -1,5 +1,5 @@
 [game]
-starting_level = 4
+starting_level = 5
 num_lives = 6
 music_volume = 80
 effects_volume = 80
@@ -49,6 +49,7 @@ player_bullet_speed = 600.0
 player_fire_cooldown = 0.25
 player_bullet_damage = 1
 enemy_bullet_speed = 250.0
+enemy_bullet_lifetime = 3.0     # seconds before an enemy bullet expires
 missile_speed = 200.0
 missile_proximity_trigger = 180.0
 turret_fire_cooldown = 2.0
@@ -80,7 +81,7 @@ laser_beam_color = [255, 60, 60, 220]   # RGBA
 laser_telegraph_color = [255, 180, 60, 120]   # RGBA dim orange
 
 [terrain]
-chunk_width = 64
+chunk_width = 32
 cull_buffer_chunks = 3
 
 [level_gen]

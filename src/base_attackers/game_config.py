@@ -62,6 +62,7 @@ class CombatSettings:
     player_fire_cooldown: float = 0.25
     player_bullet_damage: int = 1
     enemy_bullet_speed: float = 250.0
+    enemy_bullet_lifetime: float = 3.0  # seconds before an enemy bullet expires
     missile_speed: float = 200.0
     missile_proximity_trigger: float = 180.0
     turret_fire_cooldown: float = 2.0
@@ -306,6 +307,11 @@ class GameConfig(BaseGameConfig):
             ),
             enemy_bullet_speed=float(
                 combat_raw.get("enemy_bullet_speed", CombatSettings.enemy_bullet_speed)
+            ),
+            enemy_bullet_lifetime=float(
+                combat_raw.get(
+                    "enemy_bullet_lifetime", CombatSettings.enemy_bullet_lifetime
+                )
             ),
             missile_speed=float(
                 combat_raw.get("missile_speed", CombatSettings.missile_speed)

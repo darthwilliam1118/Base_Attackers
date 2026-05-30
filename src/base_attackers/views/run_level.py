@@ -1080,6 +1080,7 @@ class RunLevelView(arcade.View):
             angle_rad=angle,
             speed=self._cfg.combat.enemy_bullet_speed,
             scale=self._cfg.sprite_scale,
+            lifetime=self._cfg.combat.enemy_bullet_lifetime,
         )
         self._enemy_bullet_list.append(bullet)
         self._play_sfx(self._sm_enemy_shoot, self._snd_enemy_shoot)
@@ -1240,14 +1241,16 @@ class RunLevelView(arcade.View):
             )
 
     def _update_player_bullets(self, delta_time: float) -> None:
-        """Move player bullets right; cull past world width + margin."""
-        assert self._terrain_cfg is not None
+        """Move player bullets right; cull past world width or on terrain."""
+        assert self._terrain is not None and self._terrain_cfg is not None
         cull = self._cfg.combat.bullet_cull_margin
         right_limit = self._terrain_cfg.world_width + cull
         for bullet in list(self._bullet_list):
             assert isinstance(bullet, PlayerBullet)
             bullet.update_bullet(delta_time)
-            if bullet.center_x > right_limit:
+            if bullet.center_x > right_limit or self._terrain.point_in_terrain(
+                bullet.center_x, bullet.center_y
+            ):
                 bullet.remove_from_sprite_lists()
 
     def _is_on_screen(self, world_x: float) -> bool:
@@ -1284,11 +1287,17 @@ class RunLevelView(arcade.View):
                 self._missile_list.append(missile)
                 self._play_sfx(self._sm_missile, self._snd_missile)
 
+        assert self._terrain is not None
         for missile in list(self._missile_list):
             assert isinstance(missile, Missile)
             missile.update_missile(delta_time)
-            if missile.center_y > world_h + cull or missile.center_y < -cull:
-                # Re-arm the closest owning silo (X-coordinate match).
+            off_world = missile.center_y > world_h + cull or missile.center_y < -cull
+            hit_terrain = self._terrain.point_in_terrain(
+                missile.center_x, missile.center_y
+            )
+            if off_world or hit_terrain:
+                # Re-arm the closest owning silo (X-coordinate match) so it
+                # can fire again now this missile is gone.
                 for silo in self._silos:
                     if (
                         not silo._fire_ready
@@ -1318,14 +1327,17 @@ class RunLevelView(arcade.View):
                 self._enemy_bullet_list.append(bullet)
                 self._play_sfx(self._sm_enemy_shoot, self._snd_enemy_shoot)
 
+        assert self._terrain is not None
         for bullet in list(self._enemy_bullet_list):
             assert isinstance(bullet, EnemyBullet)
             bullet.update_bullet(delta_time)
             if (
-                bullet.center_x < -cull
+                bullet.expired
+                or bullet.center_x < -cull
                 or bullet.center_x > world_w + cull
                 or bullet.center_y < -cull
                 or bullet.center_y > world_h + cull
+                or self._terrain.point_in_terrain(bullet.center_x, bullet.center_y)
             ):
                 bullet.remove_from_sprite_lists()
 

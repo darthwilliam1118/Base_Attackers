@@ -30,6 +30,7 @@ class EnemyBullet(arcade.Sprite):
         angle_rad: float,
         speed: float,
         scale: float,
+        lifetime: float = 3.0,
     ) -> None:
         texture = arcade.load_texture(
             resource_path(_SPRITE_PATH),
@@ -41,7 +42,16 @@ class EnemyBullet(arcade.Sprite):
         self._vx = math.cos(angle_rad) * speed
         self._vy = math.sin(angle_rad) * speed
         self.angle = _SPRITE_NATURAL_BEARING_DEG - math.degrees(angle_rad)
+        self._lifetime = lifetime
+        self._age = 0.0
+
+    @property
+    def expired(self) -> bool:
+        """True once the bullet has lived past its lifetime — culled even
+        if it never hit terrain or left the world."""
+        return self._age >= self._lifetime
 
     def update_bullet(self, delta_time: float) -> None:
+        self._age += delta_time
         self.center_x += self._vx * delta_time
         self.center_y += self._vy * delta_time

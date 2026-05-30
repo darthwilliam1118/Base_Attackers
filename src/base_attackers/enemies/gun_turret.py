@@ -143,6 +143,7 @@ class GunTurret:
             angle_rad=angle_rad,
             speed=speed,
             scale=scale,
+            lifetime=self.cfg.enemy_bullet_lifetime,
         )
 
     # ---- damage ---------------------------------------------------
