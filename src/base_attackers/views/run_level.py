@@ -106,6 +106,7 @@ _SND_PLAYER_SHOOT = "assets/sounds/laserSmall_000.wav"
 _SND_ENEMY_SHOOT = "assets/sounds/laserLarge_000.wav"
 _SND_ENEMY_BOOM = "assets/sounds/explosionCrunch_000.wav"
 _SND_PLAYER_BOOM = "assets/sounds/explosionCrunch_004.wav"
+_SND_EXTRA_LIFE = "assets/sounds/extraLife.wav"
 
 # Death sequence + dock indicator timings.
 _DEATH_DURATION = 1.5
@@ -140,6 +141,34 @@ _FUEL_COLOR_LOW = (255, 80, 80)
 _FUEL_LOW_FRAC = 0.25
 _HP_COLOR = (80, 220, 80)
 _TOWER_COLOR = (255, 160, 60)
+
+# HUD text rows (screen-Y offsets from sh = window.height).  Four rows
+# inside the _HUD_BAND_HEIGHT band.  Row 1 holds SCORE / LEVEL / lives;
+# row 2 holds the boss bar + effects line; rows 3/4 hold the HP/FUEL
+# text + bars.
+_ROW1_Y = 20.0
+_ROW2_Y = 44.0
+_ROW3_Y = 60.0
+_ROW4_Y = 80.0
+
+# Lives icon sprites.
+_LIVES_ICON_SCALE = 0.25
+_LIVES_ICON_PATH = "assets/images/PNG/playerShip1.png"
+_LIVES_ICON_MAX = 6
+
+# Defender-style radar strip (drawn in GUI-camera space, immediate mode).
+_RADAR_HEIGHT = 28.0  # px height of the radar strip
+_RADAR_MARGIN_X = 12.0  # px from window left/right edges
+_RADAR_MARGIN_BOT = 6.0  # px from window bottom
+_RADAR_BG_COLOR = (20, 30, 20, 200)
+_RADAR_BORDER_COLOR = (60, 100, 60, 255)
+_RADAR_PLAYER_COLOR = (255, 255, 100, 255)  # bright yellow dot
+_RADAR_ENEMY_COLOR = (255, 80, 80, 200)  # red dots
+_RADAR_TOWER_COLOR = (80, 200, 255, 200)  # cyan dots
+_RADAR_BOSS_COLOR = (255, 100, 30, 255)  # orange dot
+_RADAR_CAM_COLOR = (255, 255, 255, 60)  # white tint for visible area
+_RADAR_DOT_R = 2.0  # radius of entity dots
+_EFFECTS_COLOR = (180, 220, 255, 255)
 
 
 def _build_terrain(
@@ -277,6 +306,9 @@ class RunLevelView(arcade.View):
         self._sm_missile = SoundManager(max_simultaneous=2)
         self._sm_enemy_boom = SoundManager(max_simultaneous=4)
         self._sm_player_boom = SoundManager(max_simultaneous=2)
+        # Positive-feedback chime played on level complete.
+        self._snd_extra_life = arcade.Sound(resource_path(_SND_EXTRA_LIFE))
+        self._sm_extra_life = SoundManager(max_simultaneous=1)
 
         # Explosion + death timer.
         self._explosion_list = arcade.SpriteList()
@@ -302,11 +334,25 @@ class RunLevelView(arcade.View):
         self._hud_fuel_label: arcade.Text | None = None
         self._hud_docked: arcade.Text | None = None
         self._hud_score: arcade.Text | None = None
-        self._hud_lives: arcade.Text | None = None
+        self._hud_level: arcade.Text | None = None
+        self._hud_effects: arcade.Text | None = None
         self._hud_boss_label: arcade.Text | None = None
         self._hud_powerup_flash: arcade.Text | None = None
         self._hud_god_mode: arcade.Text | None = None
         self._hud_debug_hints: arcade.Text | None = None
+        # Lives rendered as ship-icon sprites (one fewer than the live
+        # count — the active ship is the one you fly).  SpriteList drawn
+        # in GUI-camera space; visibility toggled on change.
+        self._hud_lives_list: arcade.SpriteList = arcade.SpriteList()
+        self._hud_lives_icons: list[arcade.Sprite] = []
+        # Cache sentinels — only rewrite Text/visibility when the value
+        # actually changes (cache-on-change pattern).
+        self._last_score: int = -1
+        self._last_hp: int = -1
+        self._last_fuel: float = -1.0
+        self._last_lives: int = -1
+        self._last_level: int = -1
+        self._last_effects_str: str = ""
 
         # Power-ups.  Manager + spawner are built in on_show_view once
         # window dims are bound; texture registration is window-free so
@@ -782,6 +828,7 @@ class RunLevelView(arcade.View):
         from src.base_attackers.state import GameState
 
         self._sync_score_to_player()
+        self._play_sfx(self._sm_extra_life, self._snd_extra_life)
         self._manager.transition(GameState.LEVEL_COMPLETE)
 
     def _sync_score_to_player(self) -> None:
@@ -1768,58 +1815,103 @@ class RunLevelView(arcade.View):
         sw = self.window.width
         sh = self.window.height
         common = dict(font_name=FONT_THIN, font_size=14, color=arcade.color.WHITE)
-        self._hud_fps = arcade.Text("FPS: --", 12, sh - 20, **common)
-        self._hud_world_x = arcade.Text("X: 0", 12, sh - 40, **common)
-        self._hud_hp = arcade.Text("HP --", 12, sh - 60, **common)
-        self._hud_fuel_label = arcade.Text("FUEL --", 12, sh - 80, **common)
+
+        # Row 1 — SCORE (left), LEVEL (centre), lives icons (right).
+        self._hud_score = arcade.Text("SCORE  000000", 12, sh - _ROW1_Y, **common)
+        self._hud_level = arcade.Text(
+            "LEVEL  1",
+            sw / 2,
+            sh - _ROW1_Y,
+            font_name=FONT_THIN,
+            font_size=14,
+            color=arcade.color.WHITE,
+            anchor_x="center",
+        )
         self._hud_docked = arcade.Text(
             "DOCKED",
-            220,
-            sh - 20,
+            260,
+            sh - _ROW1_Y,
             font_name=FONT_THIN,
             font_size=14,
             color=arcade.color.YELLOW,
         )
-        self._hud_score = arcade.Text("SCORE  0", sw - 200, sh - 20, **common)
-        self._hud_lives = arcade.Text("LIVES 0", sw - 200, sh - 40, **common)
-        # "BOSS" label sits at the left end of the centred boss health bar
-        # (drawn one row below the top HUD text so it stays clear of it).
+        # Lives icons — up to _LIVES_ICON_MAX ship sprites anchored to the
+        # right edge, one fewer than the live count is shown each refresh.
+        self._hud_lives_list = arcade.SpriteList()
+        self._hud_lives_icons = []
+        icon_tex = arcade.load_texture(resource_path(_LIVES_ICON_PATH))
+        for i in range(_LIVES_ICON_MAX):
+            icon = arcade.Sprite(icon_tex, scale=_LIVES_ICON_SCALE)
+            icon.center_y = sh - _ROW1_Y + 4.0
+            icon.center_x = sw - 18.0 - i * (icon.width + 4.0)
+            icon.visible = False
+            self._hud_lives_list.append(icon)
+            self._hud_lives_icons.append(icon)
+
+        # Rows 3/4 — HP / FUEL text labels (bars drawn beside them).
+        self._hud_hp = arcade.Text("HP --", 12, sh - _ROW3_Y, **common)
+        self._hud_fuel_label = arcade.Text("FUEL --", 12, sh - _ROW4_Y, **common)
+
+        # Row 2 — "BOSS" label at the left end of the centred boss health
+        # bar, plus the active power-up effects line (left-aligned so it
+        # clears the centred boss bar).
         self._hud_boss_label = arcade.Text(
             "BOSS",
             sw * 0.25 - 50.0,
-            sh - 44.0,
+            sh - _ROW2_Y,
             arcade.color.RED,
             font_size=12,
             font_name=FONT_THIN,
             anchor_y="bottom",
         )
+        self._hud_effects = arcade.Text(
+            "",
+            12,
+            sh - _ROW2_Y,
+            _EFFECTS_COLOR,
+            font_size=12,
+            font_name=FONT_THIN,
+        )
+
         self._hud_powerup_flash = arcade.Text(
             "",
             sw / 2,
-            sh - 20,
+            sh / 2 + 60,
             arcade.color.YELLOW,
-            font_size=16,
+            font_size=22,
             font_name=FONT_THIN,
             anchor_x="center",
+            anchor_y="center",
         )
-        # Debug HUD: "GOD MODE" tag (only when god_mode active) and a
-        # static hints line (only when cfg.debug is true).  Both sit on
-        # the top row of the existing black mask band.  GOD MODE is
-        # placed left of FPS so it stays clear of the centered hints
-        # line and the right-side SCORE.
+
+        # Debug HUD: FPS / world-X / hints and a "GOD MODE" tag — drawn
+        # only when cfg.debug / cfg.god_mode.  Parked on the right of the
+        # band (FPS/X) and centre row 2 (hints) so the production HUD
+        # stays clean when they are gated off.
+        self._hud_fps = arcade.Text(
+            "FPS: --",
+            sw - 180.0,
+            sh - _ROW3_Y,
+            (160, 160, 160),
+            11,
+            font_name=FONT_THIN,
+        )
+        self._hud_world_x = arcade.Text(
+            "X: 0", sw - 180.0, sh - _ROW4_Y, (160, 160, 160), 11, font_name=FONT_THIN
+        )
         self._hud_god_mode = arcade.Text(
             "GOD MODE",
-            90,
-            sh - 20,
+            sw / 2,
+            sh - _ROW3_Y,
             arcade.color.YELLOW,
             font_size=14,
             font_name=FONT_THIN,
-            anchor_x="left",
+            anchor_x="center",
         )
         self._hud_debug_hints = arcade.Text(
             "DEBUG  Shift+G god  Shift+P p-up  Shift+E level+  Shift+K kill  Shift+F fuel",
             sw / 2,
-            sh - 20,
+            sh - _ROW2_Y,
             (180, 180, 180),
             font_size=11,
             font_name=FONT_THIN,
@@ -1850,21 +1942,72 @@ class RunLevelView(arcade.View):
         )
 
     def _refresh_hud(self) -> None:
-        if self._hud_fps is None:
+        if self._hud_score is None:
             return
-        self._hud_fps.text = f"FPS: {arcade.get_fps():.0f}"
-        self._hud_world_x.text = f"X: {self._ship.center_x:.0f}"
-        self._hud_hp.text = f"HP {self._ship.hp} / {self._ship.MAX_HP}"
-        self._hud_fuel_label.text = f"FUEL {self._ship.fuel:.0f}"
-        if self._hud_score is not None:
-            self._hud_score.text = f"SCORE  {self._score}"
-        if self._hud_lives is not None:
-            players = self._manager.context.get("players") or []
-            idx = self._manager.context.get("active_player_index", 0)
-            lives = players[idx].lives if players and 0 <= idx < len(players) else 0
-            self._hud_lives.text = f"LIVES {lives}"
+
+        # Score (zero-padded to 6 digits).
+        if self._score != self._last_score:
+            self._hud_score.text = f"SCORE  {self._score:06d}"
+            self._last_score = self._score
+
+        # Level.
+        if self._level_num != self._last_level and self._hud_level is not None:
+            self._hud_level.text = f"LEVEL  {self._level_num}"
+            self._last_level = self._level_num
+
+        # HP / FUEL labels (bars are drawn separately each frame).
+        if self._ship.hp != self._last_hp and self._hud_hp is not None:
+            self._hud_hp.text = f"HP {self._ship.hp} / {self._ship.MAX_HP}"
+            self._last_hp = self._ship.hp
+        fuel_int = int(self._ship.fuel)
+        if fuel_int != self._last_fuel and self._hud_fuel_label is not None:
+            self._hud_fuel_label.text = f"FUEL {fuel_int}"
+            self._last_fuel = fuel_int
+
+        # Lives icons — one fewer than the live count (the active ship is
+        # the one in play).
+        players = self._manager.context.get("players") or []
+        idx = self._manager.context.get("active_player_index", 0)
+        lives = players[idx].lives if players and 0 <= idx < len(players) else 0
+        if lives != self._last_lives:
+            self._last_lives = lives
+            for i, icon in enumerate(self._hud_lives_icons):
+                icon.visible = i < (lives - 1)
+
+        # Active power-up effects line.
+        effects_str = self._build_effects_str()
+        if effects_str != self._last_effects_str and self._hud_effects is not None:
+            self._hud_effects.text = effects_str
+            self._last_effects_str = effects_str
+
+        # Power-up flash text.
         if self._hud_powerup_flash is not None:
             self._hud_powerup_flash.text = self._powerup_flash_label
+
+        # Debug-only readouts.
+        if self._cfg.debug and self._hud_fps is not None:
+            self._hud_fps.text = f"FPS: {arcade.get_fps():.0f}"
+            self._hud_world_x.text = f"X: {self._ship.center_x:.0f}"
+
+    def _build_effects_str(self) -> str:
+        """Summarise active timed power-up effects for the HUD effects line.
+
+        Iterates ``PowerUpManager.get_active_effects()`` (the public getter
+        — there is no ``active_effects`` property).  Only StatModifierEffect
+        subclasses expose ``display_label``; behaviour/overlay effects fall
+        back to a title-cased ``effect_type``.
+        """
+        if self._powerup_manager is None:
+            return ""
+        parts = []
+        for effect in self._powerup_manager.get_active_effects():
+            label = (
+                getattr(effect, "display_label", "")
+                or effect.effect_type.replace("_", " ").upper()
+            )
+            dur = getattr(effect, "remaining_duration", 0.0)
+            parts.append(f"[{label} {dur:.1f}s]" if dur > 0.0 else f"[{label}]")
+        return "  ".join(parts)
 
     def _draw_hud(self) -> None:
         assert self._terrain_cfg is not None
@@ -1922,29 +2065,36 @@ class RunLevelView(arcade.View):
                 _TOWER_COLOR,
             )
 
-        # HUD text.
-        if self._hud_fps:
-            self._hud_fps.draw()
-        if self._hud_world_x:
-            self._hud_world_x.draw()
+        # HUD text — always-on production elements.
         if self._hud_hp:
             self._hud_hp.draw()
         if self._hud_fuel_label:
             self._hud_fuel_label.draw()
         if self._hud_score:
             self._hud_score.draw()
-        if self._hud_lives:
-            self._hud_lives.draw()
+        if self._hud_level:
+            self._hud_level.draw()
+        self._hud_lives_list.draw()
+        if self._hud_effects and self._last_effects_str:
+            self._hud_effects.draw()
         if self._hud_docked and self._ship.is_docked and self._dock_blink_visible:
             self._hud_docked.draw()
         if self._hud_powerup_flash and self._powerup_flash_label:
             self._hud_powerup_flash.draw()
-        if self._cfg.debug and self._hud_debug_hints is not None:
-            self._hud_debug_hints.draw()
+
+        # Debug-only HUD — gated so the production build stays clean.
+        if self._cfg.debug:
+            if self._hud_fps:
+                self._hud_fps.draw()
+            if self._hud_world_x:
+                self._hud_world_x.draw()
+            if self._hud_debug_hints is not None:
+                self._hud_debug_hints.draw()
         if self._cfg.god_mode and self._hud_god_mode is not None:
             self._hud_god_mode.draw()
 
         self._draw_boss_health_bar()
+        self._draw_radar()
 
     def _draw_boss_health_bar(self) -> None:
         """Wide centred boss health bar, only while the boss is alive."""
@@ -1985,3 +2135,89 @@ class RunLevelView(arcade.View):
             arcade.draw_lrbt_rectangle_filled(
                 x, x + width * fraction, y_bottom, y_top, color
             )
+
+    def _draw_radar(self) -> None:
+        """Defender-style radar strip at the bottom of the screen.
+
+        Drawn entirely in gui_camera space with immediate-mode calls — no
+        sprites, no ShapeElementList.  The radar maps world_x -> radar_x
+        linearly; world_y is ignored (everything appears on a single
+        horizontal strip).
+        """
+        if self._terrain_cfg is None:
+            return
+
+        sw = float(self.window.width)
+        ww = float(self._terrain_cfg.world_width)
+        if ww <= 0.0:
+            return
+
+        # Radar strip geometry (screen space).
+        rx = _RADAR_MARGIN_X
+        ry = _RADAR_MARGIN_BOT
+        rw = sw - 2 * _RADAR_MARGIN_X
+        rh = _RADAR_HEIGHT
+
+        def to_rx(world_x: float) -> float:
+            """Map a world X coordinate to a radar X pixel."""
+            return rx + (world_x / ww) * rw
+
+        # Background + border.
+        arcade.draw_lrbt_rectangle_filled(rx, rx + rw, ry, ry + rh, _RADAR_BG_COLOR)
+        arcade.draw_lrbt_rectangle_outline(
+            rx, rx + rw, ry, ry + rh, _RADAR_BORDER_COLOR, 1
+        )
+
+        # Camera viewport tint — shows what fraction of the world is visible.
+        cam_left = self.window.world_camera.position.x - sw / 2.0
+        cam_right = cam_left + sw
+        vx0 = max(rx, to_rx(cam_left))
+        vx1 = min(rx + rw, to_rx(cam_right))
+        if vx1 > vx0:
+            arcade.draw_lrbt_rectangle_filled(vx0, vx1, ry, ry + rh, _RADAR_CAM_COLOR)
+
+        mid_y = ry + rh / 2.0
+
+        # Fuel towers — cyan dots.
+        for tower in self._towers:
+            arcade.draw_circle_filled(
+                to_rx(tower.center_x), mid_y, _RADAR_DOT_R, _RADAR_TOWER_COLOR
+            )
+
+        # Stationary enemies — red dots.
+        for silo in self._silos:
+            if silo.is_alive:
+                arcade.draw_circle_filled(
+                    to_rx(silo.center_x), mid_y, _RADAR_DOT_R, _RADAR_ENEMY_COLOR
+                )
+        for turret in self._turrets:
+            if turret.is_alive:
+                arcade.draw_circle_filled(
+                    to_rx(turret.base.center_x), mid_y, _RADAR_DOT_R, _RADAR_ENEMY_COLOR
+                )
+        for lt in self._laser_turrets:
+            if lt.is_alive:
+                arcade.draw_circle_filled(
+                    to_rx(lt.base.center_x), mid_y, _RADAR_DOT_R, _RADAR_ENEMY_COLOR
+                )
+
+        # Patrol ships — red dots (moving).
+        for patrol in self._patrols:
+            if patrol.is_alive:
+                arcade.draw_circle_filled(
+                    to_rx(patrol.center_x), mid_y, _RADAR_DOT_R, _RADAR_ENEMY_COLOR
+                )
+
+        # Boss — larger orange dot.
+        if self._boss is not None and self._boss.is_alive:
+            arcade.draw_circle_filled(
+                to_rx(self._boss.body.center_x),
+                mid_y,
+                _RADAR_DOT_R * 2.5,
+                _RADAR_BOSS_COLOR,
+            )
+
+        # Player — bright yellow dot, drawn last so it stays on top.
+        arcade.draw_circle_filled(
+            to_rx(self._ship.center_x), mid_y, _RADAR_DOT_R * 1.5, _RADAR_PLAYER_COLOR
+        )
