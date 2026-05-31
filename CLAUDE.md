@@ -12,9 +12,11 @@
 ## Framework dependency
 agf (arcade-game-framework) is installed as a dependency.
 Source: https://github.com/darthwilliam1118/arcade-game-framework
-Version: 1e89589 (pre-v0.3.0 — will be tagged once Base Attackers agf
-additions are stable). Bump the SHA in `pyproject.toml` and
-`pip install -e ".[dev]" --force-reinstall --no-deps "arcade-game-framework @ git+…@<sha>"`
+Version: v0.3.0 (Base Attackers support complete — ScrollingGameWindow,
+MomentumShipMixin, WorldSpacePowerUpSpawner, music track cycling). Pinned
+to the tag in `pyproject.toml`. Space Attackers stays on v0.2.0. Bump the
+pin and
+`pip install -e ".[dev]" --force-reinstall --no-deps "arcade-game-framework @ git+…@<ref>"`
 whenever agf gains a new piece this game depends on.
 Import as: from agf.paths import resource_path
 
@@ -740,6 +742,75 @@ in Phase 5.  Do not re-add `_PHASE*_*_POSITIONS` lists.
 
 ---
 
+## HUD & radar — Phase 9 additions (Base Attackers specific)
+
+All HUD/radar rendering lives in `RunLevelView` (`views/run_level.py`),
+drawn in GUI-camera space.  The separate `src/base_attackers/ui/hud.py`
+`HUD` class is unused/orphaned — do NOT wire it in; extend the inline
+methods instead.
+
+### HUD (cache-on-change)
+- `_build_hud` creates every `arcade.Text` once.  `_refresh_hud` only
+  rewrites `.text`/visibility when the value changed, gated by sentinels
+  on the view (`_last_score`, `_last_hp`, `_last_fuel`, `_last_lives`,
+  `_last_level`, `_last_effects_str`).  Never set `.text` unconditionally
+  per frame.
+- Text rows use module constants `_ROW1_Y`/`_ROW2_Y`/`_ROW3_Y`/`_ROW4_Y`
+  (screen-Y offsets from `sh`).  Row 1: SCORE (`SCORE  000000`,
+  6-digit zero-pad) left, `LEVEL  N` centred, lives icons right, DOCKED.
+  Row 2: centred boss bar + left-aligned effects line.  Rows 3/4: HP/FUEL
+  text + bars (`_HP_BAR_X` … `_TOWER_BAR_X`).  Bar X offsets are tunable.
+- **Lives are icon sprites**, not text: `_hud_lives_list` (SpriteList) of
+  up to `_LIVES_ICON_MAX` `playerShip1.png` sprites at
+  `_LIVES_ICON_SCALE` (0.25), anchored to the right edge.  `_refresh_hud`
+  toggles `icon.visible = i < (lives - 1)` — one fewer icon than the live
+  count (the active ship is the one you fly).
+- **Effects line** (`_hud_effects`) is built by `_build_effects_str()`,
+  which iterates `self._powerup_manager.get_active_effects()` — the public
+  getter; there is NO `active_effects` property.  Labels come from
+  `display_label` (only `StatModifierEffect` exposes it; behaviour/overlay
+  effects fall back to a title-cased `effect_type`), durations from
+  `remaining_duration` (a property on every effect category).
+- **Debug HUD is gated**: FPS / world-X / hints draw only when
+  `cfg.debug`; GOD MODE only when `cfg.god_mode`.  Production config has
+  both false, so the band stays clean.
+
+### Radar minimap (`_draw_radar`)
+- Defender-style strip at the bottom of the screen, drawn from
+  `_draw_hud()` in GUI-camera space with immediate-mode calls only — no
+  sprites, no ShapeElementList.  Constants are `_RADAR_*` at module level.
+- Maps world X linearly to radar pixel X via the inner `to_rx(world_x) =
+  rx + (world_x / world_width) * rw`.  World Y is ignored — everything
+  sits on one horizontal strip.
+- A white camera-viewport tint (`world_camera.position.x ± sw/2`) shows
+  the visible fraction of the level.  Dots: towers cyan, all stationary
+  enemies + patrols red (guard `is_alive`; turrets/lasers via
+  `.base.center_x`), boss orange (2.5×), player yellow (1.5×, drawn last).
+  `_RADAR_DOT_R` is tunable (~0.218 px/world-unit on the 1398px strip).
+
+### Sound
+- `extraLife.wav` plays on `_trigger_level_complete()` as positive
+  feedback (`_snd_extra_life` + a `max_simultaneous=1` SoundManager).
+- `laserSmall_001.wav` is present in `assets/sounds/` but intentionally
+  unused — reserved for a future alternate-fire sound (e.g. Big Gun).
+
+### Production config
+- Release defaults in `game_config.toml`: `starting_level = 1`,
+  `num_lives = 3`, `debug = false`, `god_mode = false`.  Window stays
+  1422×800.
+
+### Fonts
+- All HUD text uses `FONT_THIN` → `"KenVector Future2 Thin"` (the TTF's
+  internal name, NOT the filename).  Both `kenvector_future2.ttf` and
+  `kenvector_future_thin2.ttf` are loaded at startup in `game._load_fonts`
+  (do not remove the agf-module FONT rebind loop).  NEVER pass
+  `bold=True` — neither font has a bold variant; Linux pyglet silently
+  falls back to a system font.
+- NOTE: do NOT run `black` against `game_config.toml` — black is for
+  Python only; passing the TOML collapses its aligned inline comments.
+
+---
+
 ## Collision detection performance
 - Terrain collision: O(1) via corridor profile — check every frame, fine
 - Player bullets vs enemies: check every frame (must feel responsive)
@@ -846,4 +917,4 @@ Phase 2 to read `cfg.terrain` + `cfg.levels[1]` exactly like
 - Phase 6 — Enemy ships + lasers: docs/features/phase-6-enemies.md (TBD)
 - Phase 7 — Level structure:      docs/features/phase-7-levels.md (done)
 - Phase 8 — Boss encounter:       docs/features/phase-8-boss.md (done)
-- Phase 9 — Polish + release:     docs/features/phase-9-polish.md (TBD)
+- Phase 9 — Polish + release:     docs/features/phase-9-polish.md (done)
