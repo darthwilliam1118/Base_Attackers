@@ -216,6 +216,18 @@ the 3.x API. Key breaking changes:
 - `win32_gdi_font` pyglet option is Windows-only — always guard:
     if sys.platform == "win32":
         pyglet.options["win32_gdi_font"] = True
+- This game DOES require `win32_gdi_font = True`: all UI text uses the
+  thin TTF whose family name is `"KenVector Future2 Thin"`, and pyglet's
+  default Windows backend (DirectWrite) cannot resolve a family name
+  ending in a weight word ("Thin") — it falls back to the system font
+  silently.  The GDI backend can.
+- CRITICAL ORDERING: pyglet selects its font backend the first time
+  `pyglet.font` is imported (which `arcade`, and therefore the first
+  `agf` import, pulls in).  The `win32_gdi_font` option MUST be set
+  before any `agf`/`arcade` import.  Both entry points (`main.py`,
+  `src/base_attackers/__main__.py`) set the pyglet options block ABOVE
+  `from agf.paths import set_project_root` for exactly this reason — do
+  not move it back below the agf import.
 
 ### Sound
 - Initialise audio backend before arcade.Window:
