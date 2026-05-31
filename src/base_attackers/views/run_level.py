@@ -45,6 +45,7 @@ from agf.ships.momentum import MomentumConfig
 from agf.sound_manager import SoundManager
 from agf.sprites.explosion import ExplosionSprite
 from agf.ui.text_utils import FONT_THIN
+from src.base_attackers.bosses import BaseBoss
 from src.base_attackers.combat import EnemyBullet, Missile, PlayerBullet
 from src.base_attackers.enemies import (
     BEHAVIOUR_INTERCEPT,
@@ -240,6 +241,15 @@ class RunLevelView(arcade.View):
         self._bullet_list = arcade.SpriteList()  # player bullets
         self._enemy_bullet_list = arcade.SpriteList()
         self._missile_list = arcade.SpriteList()
+        # Boss (spawned on boss-zone entry).  Dedicated lists — NOT the
+        # shared turret lists — so boss hardpoints are driven by the boss
+        # and resolved by a dedicated collision pass.
+        self._boss: BaseBoss | None = None
+        self._boss_body_list = arcade.SpriteList()
+        self._boss_hp_base_list = arcade.SpriteList()
+        self._boss_hp_barrel_list = arcade.SpriteList()
+        self._boss_death_timer: float = 0.0
+        self._boss_explosion_timer: float = 0.0
 
         # Combat state.  Score carries the player's running total across
         # levels and respawns (persisted in PlayerState.score).
@@ -293,6 +303,7 @@ class RunLevelView(arcade.View):
         self._hud_docked: arcade.Text | None = None
         self._hud_score: arcade.Text | None = None
         self._hud_lives: arcade.Text | None = None
+        self._hud_boss_label: arcade.Text | None = None
         self._hud_powerup_flash: arcade.Text | None = None
         self._hud_god_mode: arcade.Text | None = None
         self._hud_debug_hints: arcade.Text | None = None
@@ -412,10 +423,13 @@ class RunLevelView(arcade.View):
         self._check_docking()
 
         # Patrol ships (mobile enemies) — periodic spawn, then move/cull.
+        # Auto-spawns pause while the boss fight is active (dock pressure
+        # spawns are unaffected and still fire from _on_dock_pressure_spawn).
         self._patrol_spawn_timer -= delta_time
         if self._patrol_spawn_timer <= 0.0:
-            self._spawn_patrol_ship()
             self._patrol_spawn_timer = self._cfg.combat.patrol_spawn_interval
+            if self._boss is None:
+                self._spawn_patrol_ship()
         self._update_patrol_ships(delta_time)
 
         # Power-ups: spawn + pickup, then tick active effects (which
@@ -436,6 +450,10 @@ class RunLevelView(arcade.View):
         self._update_laser_turrets(delta_time)
         if self._death_timer > 0.0:
             return  # laser beam killed the player this frame
+        boss_dying = self._boss_death_timer > 0.0
+        self._update_boss(delta_time)
+        if boss_dying:
+            return  # death sequence (incl. its finishing frame) owns the update
         self._update_player_bullets(delta_time)
         self._check_combat_collisions()
         if self._death_timer > 0.0:
@@ -464,6 +482,9 @@ class RunLevelView(arcade.View):
         self._silo_list.draw()
         self._turret_base_list.draw()
         self._turret_barrel_list.draw()  # barrels above bases
+        self._boss_body_list.draw()
+        self._boss_hp_base_list.draw()
+        self._boss_hp_barrel_list.draw()  # hardpoint barrels above body
         self._laser_base_list.draw()
         self._laser_barrel_list.draw()  # barrels above bases
         self._draw_laser_beams()  # immediate-mode lines, ephemeral
@@ -524,6 +545,9 @@ class RunLevelView(arcade.View):
             if key == arcade.key.K:
                 self._destroy_ship()
                 return
+            if key == arcade.key.F:
+                self._debug_refuel()
+                return
         # SPACE: undock if docked, otherwise fire a player bullet.
         # The is_docked check is the gate — same key cannot do both.
         if key == arcade.key.SPACE:
@@ -545,6 +569,10 @@ class RunLevelView(arcade.View):
     def _debug_complete_level(self) -> None:
         """Shift+E — finish the level via the same path as the boss zone."""
         self._trigger_level_complete()
+
+    def _debug_refuel(self) -> None:
+        """Shift+F — top the fuel tank back up to capacity for playtesting."""
+        self._ship.fuel = self._ship.fuel_capacity
 
     def _debug_spawn_powerup(self) -> None:
         """Drop one uniformly-random power-up into the visible window.
@@ -711,11 +739,38 @@ class RunLevelView(arcade.View):
     # ---- level flow ------------------------------------------------
 
     def _on_boss_zone_reached(self) -> None:
-        """Phase 7: reaching the boss zone completes the level (boss
-        placeholder).  Phase 8 replaces this with the boss encounter.
+        """Spawn the boss when the ship reaches the boss zone.  The boss's
+        death (``_finish_boss_death``) is what completes the level now.
         """
-        log.info("Boss zone reached on level %d", self._level_num)
-        self._trigger_level_complete()
+        log.info("Boss zone reached on level %d — spawning boss", self._level_num)
+        self._spawn_boss()
+
+    def _spawn_boss(self) -> None:
+        """Construct + place the boss at the centre of the boss zone."""
+        assert self._terrain is not None and self._terrain_cfg is not None
+        cfg = self._cfg.combat
+        boss_x = self._terrain_cfg.world_width * 0.92
+        boss = BaseBoss(
+            world_x=boss_x,
+            level_num=self._level_num,
+            cfg=cfg,
+            sprite_scale=self._cfg.sprite_scale,
+        )
+        # Two-step: set Y once body.height is known.  Centre vertically in
+        # the corridor (floor..ceiling) or float above the floor.
+        floor_y = self._terrain.floor_y_at(boss_x)
+        ceil_y = self._terrain.ceiling_y_at(boss_x)
+        if ceil_y is not None:
+            center_y = (floor_y + ceil_y) / 2.0
+        else:
+            center_y = floor_y + boss.body.height / 2.0 + 20.0
+        boss.place(center_y)
+
+        self._boss_body_list.append(boss.body)
+        for hp in boss.hardpoints:
+            self._boss_hp_base_list.append(hp.base)
+            self._boss_hp_barrel_list.append(hp.barrel)
+        self._boss = boss
 
     def _trigger_level_complete(self) -> None:
         """Persist score, then hand off to LevelCompleteView.
@@ -743,6 +798,86 @@ class RunLevelView(arcade.View):
         if already playing; stops the menu track automatically.
         """
         self.window.music.play(track_key_for_level(self._level_num))
+
+    # ---- boss ------------------------------------------------------
+
+    def _update_boss(self, delta_time: float) -> None:
+        """Tick the boss: death sequence if dying, else fire hardpoints."""
+        if self._boss is None:
+            return
+
+        # Death sequence — spawn scattered explosions, then finish.
+        if self._boss_death_timer > 0.0:
+            self._boss_death_timer -= delta_time
+            self._boss_explosion_timer -= delta_time
+            if self._boss_explosion_timer <= 0.0:
+                self._boss_explosion_timer = (
+                    self._cfg.combat.boss_death_explosion_interval
+                )
+                self._spawn_boss_death_explosion()
+            self._explosion_list.update(delta_time)
+            if self._boss_death_timer <= 0.0:
+                self._finish_boss_death()
+            return
+
+        if not self._boss.is_alive:
+            return
+
+        # Normal update — hardpoints track + fire.
+        for bullet in self._boss.update(
+            self._ship.center_x, self._ship.center_y, delta_time
+        ):
+            self._enemy_bullet_list.append(bullet)
+            self._play_sfx(self._sm_enemy_shoot, self._snd_enemy_shoot)
+
+    def _start_boss_death(self) -> None:
+        """Hide the boss + hardpoints and begin the explosion sequence."""
+        assert self._boss is not None
+        self._boss.body.visible = False
+        for hp in self._boss.hardpoints:
+            hp.base.visible = False
+            hp.barrel.visible = False
+        self._boss_death_timer = self._cfg.combat.boss_death_duration
+        self._boss_explosion_timer = 0.0  # first explosion immediately
+
+    def _spawn_boss_death_explosion(self) -> None:
+        """One explosion at a random offset within the boss body."""
+        import random
+
+        assert self._boss is not None
+        hw = self._boss.body.width / 2.0
+        hh = self._boss.body.height / 2.0
+        ex = self._boss.body.center_x + random.uniform(-hw * 0.8, hw * 0.8)
+        ey = self._boss.body.center_y + random.uniform(-hh * 0.8, hh * 0.8)
+        self._explosion_list.append(
+            ExplosionSprite(x=ex, y=ey, scale=max(1.0, self._cfg.sprite_scale * 3.0))
+        )
+        self._play_sfx(self._sm_enemy_boom, self._snd_enemy_boom)
+
+    def _finish_boss_death(self) -> None:
+        """Remove boss sprites, award score, and complete the level."""
+        assert self._boss is not None
+        self._boss.body.remove_from_sprite_lists()
+        for hp in self._boss.hardpoints:
+            hp.base.remove_from_sprite_lists()
+            hp.barrel.remove_from_sprite_lists()
+        self._boss = None
+        self._score += self._level_num * 500
+        self._trigger_level_complete()
+
+    def _on_hardpoint_destroyed(self, hardpoint: GunTurret) -> None:
+        """Explode + remove a destroyed boss hardpoint (body survives)."""
+        self._explosion_list.append(
+            ExplosionSprite(
+                x=hardpoint.base.center_x,
+                y=hardpoint.base.center_y,
+                scale=max(1.0, self._cfg.sprite_scale * 2.0),
+            )
+        )
+        hardpoint.base.remove_from_sprite_lists()
+        hardpoint.barrel.remove_from_sprite_lists()
+        self._score += 150
+        self._play_sfx(self._sm_enemy_boom, self._snd_enemy_boom)
 
     def _on_terrain_collision(self) -> None:
         """Ship hit terrain — start the destruction sequence."""
@@ -1460,6 +1595,34 @@ class RunLevelView(arcade.View):
                 if lt is not None and lt.take_damage(damage):
                     self._on_laser_turret_destroyed(lt)
 
+        # vs boss — hardpoint bases first (so a shot over both hits the
+        # hardpoint), then the body.  Skipped during the death sequence.
+        if self._boss is None or self._boss_death_timer > 0.0:
+            return
+        for bullet in list(self._bullet_list):
+            if not bullet.sprite_lists:
+                continue
+            hits = arcade.check_for_collision_with_list(bullet, self._boss_hp_base_list)
+            if hits:
+                bullet.remove_from_sprite_lists()
+                base_sprite = hits[0]
+                hp = next(
+                    (h for h in self._boss.hardpoints if h.base is base_sprite), None
+                )
+                if hp is not None and hp.take_damage(damage):
+                    self._on_hardpoint_destroyed(hp)
+        if not self._boss.is_alive:
+            return
+        for bullet in list(self._bullet_list):
+            if not bullet.sprite_lists:
+                continue
+            hits = arcade.check_for_collision_with_list(bullet, self._boss_body_list)
+            if hits:
+                bullet.remove_from_sprite_lists()
+                if self._boss.take_damage(damage):
+                    self._start_boss_death()
+                    return
+
     def _check_enemy_hits(self) -> None:
         if not self._ship.is_alive or self._ship.is_docked:
             # While docked the brief still allows damage in theory, but
@@ -1492,6 +1655,17 @@ class RunLevelView(arcade.View):
             if patrol in self._patrols:
                 self._patrols.remove(patrol)
             self._damage_player(self._cfg.combat.patrol_ram_damage)
+            if self._death_timer > 0.0:
+                return
+        # Boss body contact — flying into the boss costs HP (no instakill;
+        # the every-other-frame cadence keeps it survivable).
+        if (
+            self._boss is not None
+            and self._boss.is_alive
+            and self._boss_death_timer <= 0.0
+            and arcade.check_for_collision_with_list(self._ship, self._boss_body_list)
+        ):
+            self._damage_player(1)
             if self._death_timer > 0.0:
                 return
 
@@ -1608,6 +1782,17 @@ class RunLevelView(arcade.View):
         )
         self._hud_score = arcade.Text("SCORE  0", sw - 200, sh - 20, **common)
         self._hud_lives = arcade.Text("LIVES 0", sw - 200, sh - 40, **common)
+        # "BOSS" label sits at the left end of the centred boss health bar
+        # (drawn one row below the top HUD text so it stays clear of it).
+        self._hud_boss_label = arcade.Text(
+            "BOSS",
+            sw * 0.25 - 50.0,
+            sh - 44.0,
+            arcade.color.RED,
+            font_size=12,
+            font_name=FONT_THIN,
+            anchor_y="bottom",
+        )
         self._hud_powerup_flash = arcade.Text(
             "",
             sw / 2,
@@ -1632,7 +1817,7 @@ class RunLevelView(arcade.View):
             anchor_x="left",
         )
         self._hud_debug_hints = arcade.Text(
-            "DEBUG  Shift+G god  Shift+P p-up  Shift+E level+  Shift+K kill",
+            "DEBUG  Shift+G god  Shift+P p-up  Shift+E level+  Shift+K kill  Shift+F fuel",
             sw / 2,
             sh - 20,
             (180, 180, 180),
@@ -1758,6 +1943,30 @@ class RunLevelView(arcade.View):
             self._hud_debug_hints.draw()
         if self._cfg.god_mode and self._hud_god_mode is not None:
             self._hud_god_mode.draw()
+
+        self._draw_boss_health_bar()
+
+    def _draw_boss_health_bar(self) -> None:
+        """Wide centred boss health bar, only while the boss is alive."""
+        if self._boss is None or not self._boss.is_alive:
+            return
+        sw = self.window.width
+        sh = self.window.height
+        bar_w = sw * 0.5
+        bar_h = 14.0
+        bar_x = (sw - bar_w) / 2.0
+        bar_y = sh - 44.0
+        frac = self._boss.hp_fraction
+        arcade.draw_lrbt_rectangle_filled(
+            bar_x, bar_x + bar_w, bar_y, bar_y + bar_h, (60, 60, 60, 200)
+        )
+        if frac > 0.0:
+            color = (255, 100, 30) if frac < 0.3 else (220, 40, 40)
+            arcade.draw_lrbt_rectangle_filled(
+                bar_x, bar_x + bar_w * frac, bar_y, bar_y + bar_h, color
+            )
+        if self._hud_boss_label is not None:
+            self._hud_boss_label.draw()
 
     def _draw_bar(
         self,

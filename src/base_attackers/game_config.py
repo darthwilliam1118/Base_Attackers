@@ -92,6 +92,15 @@ class CombatSettings:
     laser_telegraph_color: list[int] = field(
         default_factory=lambda: [255, 180, 60, 120]
     )
+    # Boss
+    boss_scale_factor: float = 3.0  # boss sprite = sprite_scale * this
+    boss_hp_base: int = 30  # HP at level 1
+    boss_hp_per_level: int = 10  # additional HP per level above 1
+    boss_hardpoint_count: int = 3  # gun turrets attached to the boss body
+    boss_fire_cooldown: float = 1.2  # seconds between each hardpoint shot
+    boss_bullet_speed: float = 220.0
+    boss_death_duration: float = 2.5  # seconds of death explosions
+    boss_death_explosion_interval: float = 0.25  # seconds between explosions
 
 
 @dataclass
@@ -408,6 +417,37 @@ class GameConfig(BaseGameConfig):
             laser_telegraph_color=list(
                 combat_raw.get(
                     "laser_telegraph_color", CombatSettings().laser_telegraph_color
+                )
+            ),
+            boss_scale_factor=float(
+                combat_raw.get("boss_scale_factor", CombatSettings.boss_scale_factor)
+            ),
+            boss_hp_base=int(
+                combat_raw.get("boss_hp_base", CombatSettings.boss_hp_base)
+            ),
+            boss_hp_per_level=int(
+                combat_raw.get("boss_hp_per_level", CombatSettings.boss_hp_per_level)
+            ),
+            boss_hardpoint_count=int(
+                combat_raw.get(
+                    "boss_hardpoint_count", CombatSettings.boss_hardpoint_count
+                )
+            ),
+            boss_fire_cooldown=float(
+                combat_raw.get("boss_fire_cooldown", CombatSettings.boss_fire_cooldown)
+            ),
+            boss_bullet_speed=float(
+                combat_raw.get("boss_bullet_speed", CombatSettings.boss_bullet_speed)
+            ),
+            boss_death_duration=float(
+                combat_raw.get(
+                    "boss_death_duration", CombatSettings.boss_death_duration
+                )
+            ),
+            boss_death_explosion_interval=float(
+                combat_raw.get(
+                    "boss_death_explosion_interval",
+                    CombatSettings.boss_death_explosion_interval,
                 )
             ),
         )

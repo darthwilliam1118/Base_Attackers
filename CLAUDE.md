@@ -694,6 +694,52 @@ in Phase 5.  Do not re-add `_PHASE*_*_POSITIONS` lists.
 
 ---
 
+## Boss — Phase 8 additions (Base Attackers specific)
+
+### BaseBoss
+- `src/base_attackers/bosses/boss.py`.  Composite (like `GunTurret`/
+  `LaserTurret`) — NOT an `arcade.Sprite`.  Owns `body` (`arcade.Sprite`,
+  scale = `sprite_scale * boss_scale_factor`) and `hardpoints`
+  (`list[GunTurret]`).  HP = `boss_hp_base + (level-1)*boss_hp_per_level`
+  (level 1 = 30, level 5 = 70).  Stationary — no movement.
+- **Two-step placement**: construct, then `boss.place(center_y)` once
+  `body.height` is known; `place` also calls `_attach_hardpoints()` so
+  hardpoint offsets are relative to the final body centre.  Hardpoints
+  float (positions set directly, NOT `position_on_terrain`).  Offset
+  multipliers `hw*0.4`/`hh*0.5` are art-tunable.
+- `_BossCombatSettings` shim wraps `CombatSettings` and overrides only
+  `turret_fire_cooldown` → `boss_fire_cooldown`, so hardpoint
+  `GunTurret`s reuse the stock class on the boss cadence.
+- `BaseBoss.update()` ticks live hardpoints and returns the `BossBullet`s
+  fired this frame (built from `hp._aim_angle`); the body never moves.
+
+### RunLevelView wiring
+- **Dedicated boss SpriteLists** — `_boss_body_list`,
+  `_boss_hp_base_list`, `_boss_hp_barrel_list` — NOT the shared
+  `_turret_*_list`.  Hardpoints are updated/fired by the boss (not
+  `_update_turrets`), and player-bullet collision is a dedicated pass in
+  `_check_player_bullet_hits` (hardpoint bases via
+  `next(h for h in boss.hardpoints …)`, then the body).  The brief's
+  "reuse `_turret_base_list` for free" does NOT work — the turret lookup
+  is against `self._turrets`, which boss hardpoints are intentionally not
+  in.  Do not add them there.
+- `BossBullet` subclasses `EnemyBullet` (uses `boss_shot1.png`) and goes
+  into `_enemy_bullet_list`, so existing move/cull/expiry and
+  player-damage all handle it for free.
+- `_on_boss_zone_reached` → `_spawn_boss` (boss at `world_width*0.92`).
+  `_update_boss` runs in `on_update` after the laser turrets; while
+  `_boss_death_timer > 0` the death sequence owns the frame (early
+  return).  `_finish_boss_death` is the ONLY boss path to
+  `_trigger_level_complete` (+`level_num*500` score).
+- Hardpoint kill = `_on_hardpoint_destroyed` (explosion, +150, body
+  survives).  Body kill = `_start_boss_death` (hide sprites, scatter
+  explosions over `boss_death_duration`).  Ship contact with the body
+  damages the player (`_check_enemy_hits`, shield-aware).
+- Patrol auto-spawns are suppressed while `self._boss is not None`; dock
+  pressure spawns are not.
+
+---
+
 ## Collision detection performance
 - Terrain collision: O(1) via corridor profile — check every frame, fine
 - Player bullets vs enemies: check every frame (must feel responsive)
@@ -799,5 +845,5 @@ Phase 2 to read `cfg.terrain` + `cfg.levels[1]` exactly like
 - Phase 5 — Power-ups:            docs/features/phase-5-powerups.md (TBD)
 - Phase 6 — Enemy ships + lasers: docs/features/phase-6-enemies.md (TBD)
 - Phase 7 — Level structure:      docs/features/phase-7-levels.md (done)
-- Phase 8 — Boss archetypes:      docs/features/phase-8-bosses.md (TBD)
+- Phase 8 — Boss encounter:       docs/features/phase-8-boss.md (done)
 - Phase 9 — Polish + release:     docs/features/phase-9-polish.md (TBD)

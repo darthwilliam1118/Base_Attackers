@@ -1,5 +1,5 @@
 [game]
-starting_level = 5
+starting_level = 1
 num_lives = 6
 music_volume = 80
 effects_volume = 80
@@ -79,6 +79,16 @@ laser_beam_width = 3.0          # px line width for draw call
 laser_proximity_trigger = 260.0  # px — turret activates when ship is within
 laser_beam_color = [255, 60, 60, 220]   # RGBA
 laser_telegraph_color = [255, 180, 60, 120]   # RGBA dim orange
+
+# Boss
+boss_scale_factor = 3.0        # boss sprite = sprite_scale * this
+boss_hp_base = 30              # HP at level 1
+boss_hp_per_level = 10         # additional HP per level above 1
+boss_hardpoint_count = 3       # gun turrets attached to the boss body
+boss_fire_cooldown = 1.2       # seconds between each hardpoint shot
+boss_bullet_speed = 220.0      # px/s — slightly slower than turret bullets
+boss_death_duration = 2.5      # seconds of death explosions before level complete
+boss_death_explosion_interval = 0.25  # seconds between death explosions
 
 [terrain]
 chunk_width = 32
