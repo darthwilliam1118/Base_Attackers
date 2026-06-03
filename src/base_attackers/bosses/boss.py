@@ -1,22 +1,22 @@
-"""BaseBoss — large stationary boss enemy with multiple gun hardpoints.
+"""BaseBoss — large boss enemy with destructible gun hardpoints.
 
-Composite object (like ``GunTurret`` / ``LaserTurret``): NOT itself an
-``arcade.Sprite``.  Owns a ``body`` sprite and ``hardpoints`` (a list of
-``GunTurret`` instances).  ``RunLevelView`` owns the SpriteLists and the
-collision/draw wiring:
+Composite object (NOT itself an ``arcade.Sprite``).  Owns a ``body``
+sprite and ``hardpoints`` (a list of ``BossGun`` — single fixed
+``boss_gun.png`` sprites, no base, no rotation).  ``RunLevelView`` owns
+the SpriteLists and the collision/draw wiring:
 - the body goes into ``_boss_body_list``,
-- the hardpoint base/barrel sprites go into dedicated
-  ``_boss_hp_base_list`` / ``_boss_hp_barrel_list`` (NOT the shared
-  ``_turret_*_list`` — boss hardpoints are updated/fired by the boss, not
-  by ``_update_turrets``, and resolved by a dedicated collision pass).
+- each gun sprite goes into ``_boss_gun_list`` (drawn ABOVE the body, and
+  ABOVE the enemy-bullet list so boss bullets emerge from under the gun).
+
+Gun positions come from ``cfg.boss_gun_positions`` — top-left pixel
+offsets within the body's native ``224x256`` grid — so the art alignment
+is data-driven (per-boss tunable).  Guns scale with the body and bob with
+it; each fires on ``boss_fire_cooldown`` and the boss aims every shot at
+the player's current position (the gun sprite itself never rotates).
 
 Placement is the two-step construct + position pattern: the body sprite
 height is only known after the texture loads, so the caller builds the
 boss then calls ``place(center_y)`` once ``body.height`` is available.
-
-Hardpoints fire on the boss cadence via the ``_BossCombatSettings`` shim,
-which overrides only ``turret_fire_cooldown`` so the standard
-``GunTurret`` is reused unchanged.
 """
 
 from __future__ import annotations
@@ -27,30 +27,61 @@ import arcade
 
 from agf.paths import resource_path
 from src.base_attackers.combat.enemy_bullet import EnemyBullet
-from src.base_attackers.enemies.gun_turret import GunTurret
 from src.base_attackers.game_config import CombatSettings
 
 _BODY_SPRITE = "assets/images/PNG/Enemies/boss_body.png"
+_GUN_SPRITE = "assets/images/PNG/Enemies/boss_gun.png"
 _BOSS_BULLET_PATH = "assets/images/PNG/Lasers/boss_shot1.png"
 # boss_shot1.png renders facing east at angle 0 (same convention as
 # EnemyBullet's laserRed01).  Flip this if a swapped asset points elsewhere.
 _BULLET_NATURAL_BEARING_DEG = 0.0
 
 
-class _BossCombatSettings:
-    """Thin wrapper over ``CombatSettings`` that overrides only
-    ``turret_fire_cooldown`` so boss hardpoints fire on the boss cadence
-    without modifying ``GunTurret`` or ``CombatSettings``.  Every other
-    attribute access delegates to the wrapped settings.
+class BossGun:
+    """A single fixed boss gun — one ``boss_gun.png`` sprite, no base, no
+    rotation.  Destructible (its own HP / explosion / score) and fires on
+    the boss cadence; the boss aims each shot at the player.  Replaces the
+    old ``GunTurret`` (base + rotating barrel) hardpoint.
     """
 
-    def __init__(self, base: CombatSettings) -> None:
-        self._base = base
+    def __init__(
+        self,
+        texture: arcade.Texture,
+        scale: float,
+        hp: int,
+        fire_period: float,
+        initial_cooldown: float = 0.0,
+    ) -> None:
+        self.sprite = arcade.Sprite(texture, scale=scale)
+        self.hp = hp
+        self._fire_period = fire_period
+        self._fire_cooldown = initial_cooldown
 
-    def __getattr__(self, name: str):
-        if name == "turret_fire_cooldown":
-            return self._base.boss_fire_cooldown
-        return getattr(self._base, name)
+    @property
+    def is_alive(self) -> bool:
+        return self.hp > 0
+
+    @property
+    def center_x(self) -> float:
+        return self.sprite.center_x
+
+    @property
+    def center_y(self) -> float:
+        return self.sprite.center_y
+
+    def take_damage(self, amount: int = 1) -> bool:
+        """Returns True if the gun is destroyed."""
+        self.hp = max(0, self.hp - amount)
+        return self.hp <= 0
+
+    def update(self, delta_time: float) -> bool:
+        """Tick the fire cooldown; return True on the frame it is ready to
+        fire (the boss builds the player-aimed bullet)."""
+        self._fire_cooldown -= delta_time
+        if self._fire_cooldown <= 0.0:
+            self._fire_cooldown = self._fire_period
+            return True
+        return False
 
 
 class BossBullet(EnemyBullet):
@@ -110,8 +141,16 @@ class BaseBoss:
         self.body.center_x = world_x
         self.body.center_y = 0.0
 
-        self.hardpoints: list[GunTurret] = []
+        self.hardpoints: list[BossGun] = []
         self._sprite_scale = sprite_scale
+        self._boss_scale = boss_scale  # guns share the body scale
+
+        # Vertical bob (set via set_oscillation after placement).  A zero
+        # amplitude keeps the boss stationary (levels with no vertical room).
+        self._osc_center: float = 0.0
+        self._osc_amplitude: float = 0.0
+        self._osc_speed: float = 0.0
+        self._osc_phase: float = 0.0
 
     # ---- properties -----------------------------------------------
 
@@ -144,72 +183,89 @@ class BaseBoss:
         self._attach_hardpoints()
 
     def _attach_hardpoints(self) -> None:
-        """Create ``GunTurret`` hardpoints positioned around the body.
+        """Create one ``BossGun`` per ``cfg.boss_gun_positions`` entry.
 
-        Offsets are relative to the body centre so the turrets read as
-        part of the boss.  ``hw*0.4`` / ``hh*0.5`` multipliers are
-        geometric starting points — tune for the art.  Hardpoints float in
-        space, so positions are set directly rather than via
-        ``position_on_terrain``.
+        Each position is the gun sprite's top-left pixel within the body's
+        native 224x256 grid.  Converted here to a world-space gun centre
+        (the body renders at ``_boss_scale``, y is up, sprites are
+        centre-anchored).  Fire cooldowns are staggered so the guns don't
+        all fire on the same frame.
         """
         cfg = self.cfg
-        hw = self.body.width / 2.0
-        hh = self.body.height / 2.0
-        cx = self.body.center_x
-        cy = self.body.center_y
+        scale = self._boss_scale
+        # Body top-left in world space (y up).
+        body_left = self.body.center_x - self.body.width / 2.0
+        body_top = self.body.center_y + self.body.height / 2.0
 
-        boss_cfg = _BossCombatSettings(cfg)  # boss fire cadence for hardpoints
-
-        count = min(cfg.boss_hardpoint_count, 4)
-        offsets: list[tuple[float, float, str]] = []
-        if count >= 1:
-            offsets.append((0.0, hh * 0.5, "floor"))  # top
-        if count >= 2:
-            offsets.append((-hw * 0.4, 0.0, "floor"))  # left
-        if count >= 3:
-            offsets.append((hw * 0.4, 0.0, "floor"))  # right
-        if count >= 4:
-            offsets.append((0.0, -hh * 0.5, "ceiling"))  # bottom
-
-        for ox, oy, surface in offsets:
-            turret = GunTurret(
-                world_x=cx + ox,
-                surface=surface,
-                cfg=boss_cfg,  # type: ignore[arg-type]
-                scale=self._sprite_scale,
+        gun_tex = arcade.load_texture(
+            resource_path(_GUN_SPRITE), hit_box_algorithm=arcade.hitbox.algo_simple
+        )
+        positions = cfg.boss_gun_positions
+        count = max(1, len(positions))
+        for i, (px, py) in enumerate(positions):
+            gun = BossGun(
+                texture=gun_tex,
+                scale=scale,
+                hp=cfg.turret_hp,
+                fire_period=cfg.boss_fire_cooldown,
+                # Stagger so the guns alternate rather than fire in unison.
+                initial_cooldown=cfg.boss_fire_cooldown * (i + 1) / count,
             )
-            half_base = turret.base.height / 2.0
-            half_barrel = turret.barrel.height / 2.0
-            turret.base.center_x = cx + ox
-            turret.base.center_y = cy + oy
-            turret.barrel.center_x = cx + ox
-            if surface == "floor":
-                turret.base.angle = 180.0
-                turret._barrel_offset_y = half_base + half_barrel + 2.0
-            else:
-                turret.base.angle = 0.0
-                turret._barrel_offset_y = -(half_base + half_barrel + 2.0)
-            turret.barrel.center_y = turret.base.center_y + turret._barrel_offset_y
-            self.hardpoints.append(turret)
+            gw = gun.sprite.width
+            gh = gun.sprite.height
+            gun.sprite.center_x = body_left + px * scale + gw / 2.0
+            gun.sprite.center_y = body_top - py * scale - gh / 2.0
+            self.hardpoints.append(gun)
+
+    def set_oscillation(self, amplitude: float, speed: float) -> None:
+        """Enable a slow vertical sine bob around the current body Y.
+
+        ``amplitude`` (px) and ``speed`` (rad/s) come from the caller, which
+        has already clamped the amplitude to the vertical room available in
+        the corridor.  An amplitude of 0 leaves the boss stationary.  Call
+        after ``place()`` so ``body.center_y`` is the bob centre.
+        """
+        self._osc_center = self.body.center_y
+        self._osc_amplitude = max(0.0, amplitude)
+        self._osc_speed = speed
+        self._osc_phase = 0.0
+
+    def _apply_oscillation(self, delta_time: float) -> None:
+        """Advance the bob and shift the body + every gun sprite by the same
+        delta so the whole boss moves rigidly (destroyed guns, removed from
+        their SpriteList, are skipped harmlessly).
+        """
+        if self._osc_amplitude <= 0.0:
+            return
+        self._osc_phase += delta_time * self._osc_speed
+        target_y = self._osc_center + self._osc_amplitude * math.sin(self._osc_phase)
+        dy = target_y - self.body.center_y
+        if dy == 0.0:
+            return
+        self.body.center_y = target_y
+        for hp in self.hardpoints:
+            hp.sprite.center_y += dy
 
     # ---- per-frame ------------------------------------------------
 
     def update(
         self, ship_x: float, ship_y: float, delta_time: float
     ) -> list[BossBullet]:
-        """Tick every live hardpoint and return the ``BossBullet``s fired
-        this frame.  The body is stationary — no movement update.
+        """Move the body (slow vertical bob) then tick every live gun,
+        returning the player-aimed ``BossBullet``s fired this frame.
         """
+        self._apply_oscillation(delta_time)
         bullets: list[BossBullet] = []
         for hp in self.hardpoints:
             if not hp.is_alive:
                 continue
-            if hp.update(ship_x, ship_y, delta_time):
-                angle_rad = math.radians(hp._aim_angle)
+            if hp.update(delta_time):
+                # Fixed gun — aim the shot at the player's current position.
+                angle_rad = math.atan2(ship_y - hp.center_y, ship_x - hp.center_x)
                 bullets.append(
                     BossBullet(
-                        x=hp.barrel.center_x,
-                        y=hp.barrel.center_y,
+                        x=hp.center_x,
+                        y=hp.center_y,
                         angle_rad=angle_rad,
                         speed=self.cfg.boss_bullet_speed,
                         scale=self._sprite_scale,

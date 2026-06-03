@@ -724,8 +724,19 @@ in Phase 5.  Do not re-add `_PHASE*_*_POSITIONS` lists.
 - `_BossCombatSettings` shim wraps `CombatSettings` and overrides only
   `turret_fire_cooldown` → `boss_fire_cooldown`, so hardpoint
   `GunTurret`s reuse the stock class on the boss cadence.
-- `BaseBoss.update()` ticks live hardpoints and returns the `BossBullet`s
-  fired this frame (built from `hp._aim_angle`); the body never moves.
+- `BaseBoss.update()` first applies a slow vertical sine bob (if enabled)
+  via `_apply_oscillation`, then ticks live hardpoints and returns the
+  `BossBullet`s fired this frame (built from `hp._aim_angle`).
+- **Vertical bob**: `set_oscillation(amplitude, speed)` is called after
+  `place()` so `body.center_y` is the bob centre.  `_spawn_boss` computes
+  the available vertical band (floor↔ceiling, or floor↔world-top when
+  open), centres the boss in it, and clamps amplitude to `band/2`; a band
+  narrower than `boss_oscillation_min_room` disables the bob (amplitude 0,
+  stationary fallback placement).  `_apply_oscillation` shifts the body
+  AND every hardpoint sprite by the same per-frame delta so destroyed
+  hardpoints (whose own `update` no longer repositions their barrel) stay
+  visually attached.  Config: `boss_oscillation_{amplitude,speed,min_room}`
+  in `[combat]`.
 
 ### RunLevelView wiring
 - **Dedicated boss SpriteLists** — `_boss_body_list`,

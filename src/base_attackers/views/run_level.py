@@ -45,7 +45,7 @@ from agf.ships.momentum import MomentumConfig
 from agf.sound_manager import SoundManager
 from agf.sprites.explosion import ExplosionSprite
 from agf.ui.text_utils import FONT_THIN
-from src.base_attackers.bosses import BaseBoss
+from src.base_attackers.bosses import BaseBoss, BossBullet, BossGun
 from src.base_attackers.combat import EnemyBullet, Missile, PlayerBullet
 from src.base_attackers.enemies import (
     BEHAVIOUR_INTERCEPT,
@@ -275,8 +275,7 @@ class RunLevelView(arcade.View):
         # and resolved by a dedicated collision pass.
         self._boss: BaseBoss | None = None
         self._boss_body_list = arcade.SpriteList()
-        self._boss_hp_base_list = arcade.SpriteList()
-        self._boss_hp_barrel_list = arcade.SpriteList()
+        self._boss_gun_list = arcade.SpriteList()  # BossGun sprites (no base)
         self._boss_death_timer: float = 0.0
         self._boss_explosion_timer: float = 0.0
 
@@ -528,14 +527,16 @@ class RunLevelView(arcade.View):
         self._silo_list.draw()
         self._turret_base_list.draw()
         self._turret_barrel_list.draw()  # barrels above bases
-        self._boss_body_list.draw()
-        self._boss_hp_base_list.draw()
-        self._boss_hp_barrel_list.draw()  # hardpoint barrels above body
         self._laser_base_list.draw()
         self._laser_barrel_list.draw()  # barrels above bases
         self._draw_laser_beams()  # immediate-mode lines, ephemeral
         self._missile_list.draw()
         self._enemy_bullet_list.draw()
+        # Boss body + guns draw AFTER the enemy-bullet list (which holds the
+        # boss bullets) so its shots emerge from under the body/guns.  Guns
+        # draw above the body.
+        self._boss_body_list.draw()
+        self._boss_gun_list.draw()
         self._bullet_list.draw()  # player bullets above enemy bullets
         self._ship_list.draw()
         self._scratch_list.draw()
@@ -802,20 +803,36 @@ class RunLevelView(arcade.View):
             cfg=cfg,
             sprite_scale=self._cfg.sprite_scale,
         )
-        # Two-step: set Y once body.height is known.  Centre vertically in
-        # the corridor (floor..ceiling) or float above the floor.
+        # Two-step: set Y once body.height is known.  The boss bobs slowly
+        # within the vertical band between the floor and the ceiling (or the
+        # world top when open).  Centre it in that band and clamp the bob
+        # amplitude to whatever room is left after the body height; if the
+        # band is too tight, it stays put (amplitude 0).
         floor_y = self._terrain.floor_y_at(boss_x)
         ceil_y = self._terrain.ceiling_y_at(boss_x)
-        if ceil_y is not None:
-            center_y = (floor_y + ceil_y) / 2.0
+        top_y = ceil_y if ceil_y is not None else float(self._terrain_cfg.world_height)
+        half_h = boss.body.height / 2.0
+        clearance = 16.0  # keep the body off the surfaces
+        bottom_limit = floor_y + half_h + clearance
+        top_limit = top_y - half_h - clearance
+        band = top_limit - bottom_limit
+        if band >= cfg.boss_oscillation_min_room:
+            center_y = (bottom_limit + top_limit) / 2.0
+            amplitude = min(cfg.boss_oscillation_amplitude, band / 2.0)
         else:
-            center_y = floor_y + boss.body.height / 2.0 + 20.0
+            # No room — fall back to the original stationary placement.
+            center_y = (
+                (floor_y + top_y) / 2.0
+                if ceil_y is not None
+                else floor_y + half_h + 20.0
+            )
+            amplitude = 0.0
         boss.place(center_y)
+        boss.set_oscillation(amplitude, cfg.boss_oscillation_speed)
 
         self._boss_body_list.append(boss.body)
         for hp in boss.hardpoints:
-            self._boss_hp_base_list.append(hp.base)
-            self._boss_hp_barrel_list.append(hp.barrel)
+            self._boss_gun_list.append(hp.sprite)
         self._boss = boss
 
     def _trigger_level_complete(self) -> None:
@@ -878,12 +895,11 @@ class RunLevelView(arcade.View):
             self._play_sfx(self._sm_enemy_shoot, self._snd_enemy_shoot)
 
     def _start_boss_death(self) -> None:
-        """Hide the boss + hardpoints and begin the explosion sequence."""
+        """Hide the boss + guns and begin the explosion sequence."""
         assert self._boss is not None
         self._boss.body.visible = False
         for hp in self._boss.hardpoints:
-            hp.base.visible = False
-            hp.barrel.visible = False
+            hp.sprite.visible = False
         self._boss_death_timer = self._cfg.combat.boss_death_duration
         self._boss_explosion_timer = 0.0  # first explosion immediately
 
@@ -906,23 +922,21 @@ class RunLevelView(arcade.View):
         assert self._boss is not None
         self._boss.body.remove_from_sprite_lists()
         for hp in self._boss.hardpoints:
-            hp.base.remove_from_sprite_lists()
-            hp.barrel.remove_from_sprite_lists()
+            hp.sprite.remove_from_sprite_lists()
         self._boss = None
         self._score += self._level_num * 500
         self._trigger_level_complete()
 
-    def _on_hardpoint_destroyed(self, hardpoint: GunTurret) -> None:
-        """Explode + remove a destroyed boss hardpoint (body survives)."""
+    def _on_hardpoint_destroyed(self, hardpoint: BossGun) -> None:
+        """Explode + remove a destroyed boss gun (body survives)."""
         self._explosion_list.append(
             ExplosionSprite(
-                x=hardpoint.base.center_x,
-                y=hardpoint.base.center_y,
+                x=hardpoint.center_x,
+                y=hardpoint.center_y,
                 scale=max(1.0, self._cfg.sprite_scale * 2.0),
             )
         )
-        hardpoint.base.remove_from_sprite_lists()
-        hardpoint.barrel.remove_from_sprite_lists()
+        hardpoint.sprite.remove_from_sprite_lists()
         self._score += 150
         self._play_sfx(self._sm_enemy_boom, self._snd_enemy_boom)
 
@@ -1510,16 +1524,40 @@ class RunLevelView(arcade.View):
                 self._play_sfx(self._sm_enemy_shoot, self._snd_enemy_shoot)
 
         assert self._terrain is not None
+        # Camera viewport bounds — boss bullets cull on leaving the visible
+        # view rather than expiring on a timer (see below).
+        sw = self.window.width
+        sh = self.window.height
+        cam_left = self.window.world_camera.position.x - sw / 2.0
+        cam_bottom = self.window.world_camera.position.y - sh / 2.0
+        cam_right = cam_left + sw
+        cam_top = cam_bottom + sh
         for bullet in list(self._enemy_bullet_list):
             assert isinstance(bullet, EnemyBullet)
             bullet.update_bullet(delta_time)
-            if (
+            in_terrain = self._terrain.point_in_terrain(
+                bullet.center_x, bullet.center_y
+            )
+            if isinstance(bullet, BossBullet):
+                # Boss bullets are NOT time-limited: the boss sits at the end
+                # of the level, so its shots persist until they leave the
+                # visible view (or hit terrain).  This stops the player from
+                # simply backing out of range and waiting them out.
+                if (
+                    in_terrain
+                    or bullet.center_x < cam_left - cull
+                    or bullet.center_x > cam_right + cull
+                    or bullet.center_y < cam_bottom - cull
+                    or bullet.center_y > cam_top + cull
+                ):
+                    bullet.remove_from_sprite_lists()
+            elif (
                 bullet.expired
                 or bullet.center_x < -cull
                 or bullet.center_x > world_w + cull
                 or bullet.center_y < -cull
                 or bullet.center_y > world_h + cull
-                or self._terrain.point_in_terrain(bullet.center_x, bullet.center_y)
+                or in_terrain
             ):
                 bullet.remove_from_sprite_lists()
 
@@ -1642,19 +1680,19 @@ class RunLevelView(arcade.View):
                 if lt is not None and lt.take_damage(damage):
                     self._on_laser_turret_destroyed(lt)
 
-        # vs boss — hardpoint bases first (so a shot over both hits the
-        # hardpoint), then the body.  Skipped during the death sequence.
+        # vs boss — guns first (so a shot over both hits the gun), then the
+        # body.  Skipped during the death sequence.
         if self._boss is None or self._boss_death_timer > 0.0:
             return
         for bullet in list(self._bullet_list):
             if not bullet.sprite_lists:
                 continue
-            hits = arcade.check_for_collision_with_list(bullet, self._boss_hp_base_list)
+            hits = arcade.check_for_collision_with_list(bullet, self._boss_gun_list)
             if hits:
                 bullet.remove_from_sprite_lists()
-                base_sprite = hits[0]
+                gun_sprite = hits[0]
                 hp = next(
-                    (h for h in self._boss.hardpoints if h.base is base_sprite), None
+                    (h for h in self._boss.hardpoints if h.sprite is gun_sprite), None
                 )
                 if hp is not None and hp.take_damage(damage):
                     self._on_hardpoint_destroyed(hp)

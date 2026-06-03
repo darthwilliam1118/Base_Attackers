@@ -96,11 +96,19 @@ class CombatSettings:
     boss_scale_factor: float = 3.0  # boss sprite = sprite_scale * this
     boss_hp_base: int = 30  # HP at level 1
     boss_hp_per_level: int = 10  # additional HP per level above 1
-    boss_hardpoint_count: int = 3  # gun turrets attached to the boss body
+    boss_hardpoint_count: int = 3  # (legacy) — gun count now from positions
+    # Top-left pixel of each boss_gun.png within the body's native 224x256
+    # grid.  Count of entries = number of guns.
+    boss_gun_positions: list[list[float]] = field(
+        default_factory=lambda: [[19.0, 69.0], [19.0, 172.0]]
+    )
     boss_fire_cooldown: float = 1.2  # seconds between each hardpoint shot
     boss_bullet_speed: float = 220.0
     boss_death_duration: float = 2.5  # seconds of death explosions
     boss_death_explosion_interval: float = 0.25  # seconds between explosions
+    boss_oscillation_amplitude: float = 120.0  # max px the boss bobs up/down
+    boss_oscillation_speed: float = 0.6  # rad/s of the sine (slow smooth bob)
+    boss_oscillation_min_room: float = 60.0  # min vertical band to enable bob
 
 
 @dataclass
@@ -433,6 +441,12 @@ class GameConfig(BaseGameConfig):
                     "boss_hardpoint_count", CombatSettings.boss_hardpoint_count
                 )
             ),
+            boss_gun_positions=[
+                [float(p[0]), float(p[1])]
+                for p in combat_raw.get(
+                    "boss_gun_positions", CombatSettings().boss_gun_positions
+                )
+            ],
             boss_fire_cooldown=float(
                 combat_raw.get("boss_fire_cooldown", CombatSettings.boss_fire_cooldown)
             ),
@@ -448,6 +462,23 @@ class GameConfig(BaseGameConfig):
                 combat_raw.get(
                     "boss_death_explosion_interval",
                     CombatSettings.boss_death_explosion_interval,
+                )
+            ),
+            boss_oscillation_amplitude=float(
+                combat_raw.get(
+                    "boss_oscillation_amplitude",
+                    CombatSettings.boss_oscillation_amplitude,
+                )
+            ),
+            boss_oscillation_speed=float(
+                combat_raw.get(
+                    "boss_oscillation_speed", CombatSettings.boss_oscillation_speed
+                )
+            ),
+            boss_oscillation_min_room=float(
+                combat_raw.get(
+                    "boss_oscillation_min_room",
+                    CombatSettings.boss_oscillation_min_room,
                 )
             ),
         )
