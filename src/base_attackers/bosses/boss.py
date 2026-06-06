@@ -15,8 +15,8 @@ Each mount's offset is the weapon sprite's top-left pixel relative to the
 body's top-left (native px, may be negative), converted here to a
 world-space centre.  Weapons scale with the body and bob with it.
 ``"cannon"`` mounts fire bullets aimed at the player (the sprite never
-rotates); ``"laser"`` mounts are created/destructible/drawn but do NOT
-fire yet (beam firing arrives with the level-2 boss).
+rotates); ``"laser"`` mounts run a telegraph→beam machine driven by
+``RunLevelView`` (the beam is aimed at the player, locked at firing).
 
 Placement is the two-step construct + position pattern: the body sprite
 height is only known after the texture loads, so the caller builds the
@@ -41,9 +41,13 @@ _BULLET_NATURAL_BEARING_DEG = 0.0
 
 class BossGun:
     """A single fixed boss weapon mount — one sprite, no base, no rotation.
-    Destructible (its own HP / explosion / score).  ``weapon_type ==
-    "cannon"`` fires bullets aimed by the boss at the player; ``"laser"``
-    is drawn/destructible but does not fire yet.
+    Destructible (its own HP / explosion / score).
+
+    ``weapon_type == "cannon"`` fires bullets aimed by the boss at the
+    player (`update` cadence).  ``weapon_type == "laser"`` runs a
+    telegraph→firing→cooldown beam machine driven by ``RunLevelView``
+    (which holds the laser timings); the ``laser_*`` attributes below hold
+    that per-mount state.
     """
 
     def __init__(
@@ -60,6 +64,13 @@ class BossGun:
         self.weapon_type = weapon_type
         self._fire_period = fire_period
         self._fire_cooldown = initial_cooldown
+
+        # Laser-mount state (used only when weapon_type == "laser").
+        self.laser_state: str = "idle"  # idle | telegraph | firing | cooldown
+        self.laser_timer: float = 0.0
+        self.laser_cooldown: float = initial_cooldown  # reuse the stagger
+        self.laser_aim: float = math.pi  # radians; default facing left
+        self.laser_damage_dealt: bool = False
 
     @property
     def is_alive(self) -> bool:
@@ -79,13 +90,21 @@ class BossGun:
         return self.hp <= 0
 
     def update(self, delta_time: float) -> bool:
-        """Tick the fire cooldown; return True on the frame it is ready to
-        fire (the boss builds the player-aimed bullet)."""
+        """Tick the cannon fire cooldown; return True on the frame it is
+        ready to fire (the boss builds the player-aimed bullet)."""
         self._fire_cooldown -= delta_time
         if self._fire_cooldown <= 0.0:
             self._fire_cooldown = self._fire_period
             return True
         return False
+
+    def laser_beam_end(self, length: float) -> tuple[float, float]:
+        """World-space endpoint of the laser beam from the gun centre along
+        ``laser_aim``."""
+        return (
+            self.center_x + math.cos(self.laser_aim) * length,
+            self.center_y + math.sin(self.laser_aim) * length,
+        )
 
 
 class BossBullet(EnemyBullet):
@@ -255,19 +274,28 @@ class BaseBoss:
     # ---- per-frame ------------------------------------------------
 
     def update(
-        self, ship_x: float, ship_y: float, delta_time: float
+        self,
+        ship_x: float,
+        ship_y: float,
+        delta_time: float,
+        can_fire: bool = True,
     ) -> list[BossBullet]:
-        """Move the body (slow vertical bob) then tick every live gun,
+        """Move the body (slow vertical bob) then tick the cannon mounts,
         returning the player-aimed ``BossBullet``s fired this frame.
+
+        Cannon cooldowns advance every frame, but a bullet is only emitted
+        when ``can_fire`` (the view passes False while the boss is still
+        off-screen, scrolling in).  Laser mounts are NOT handled here —
+        ``RunLevelView._update_boss_lasers`` drives their telegraph/beam
+        machine (it holds the laser timings).
         """
         self._apply_oscillation(delta_time)
         bullets: list[BossBullet] = []
         for hp in self.hardpoints:
-            if not hp.is_alive:
+            if not hp.is_alive or hp.weapon_type != "cannon":
                 continue
             ready = hp.update(delta_time)
-            # Only cannons fire for now; lasers tick but don't shoot yet.
-            if ready and hp.weapon_type == "cannon":
+            if ready and can_fire:
                 # Fixed gun — aim the shot at the player's current position.
                 angle_rad = math.atan2(ship_y - hp.center_y, ship_x - hp.center_x)
                 bullets.append(

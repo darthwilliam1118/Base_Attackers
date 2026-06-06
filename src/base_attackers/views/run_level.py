@@ -112,6 +112,15 @@ _SND_EXTRA_LIFE = "assets/sounds/extraLife.wav"
 _DEATH_DURATION = 1.5
 _DOCK_BLINK_PERIOD = 0.4
 
+# Boss spawn/placement.  The boss centre sits at world_width * _BOSS_X_FRACTION.
+# It is created once the camera's right edge comes within _BOSS_SPAWN_LEAD of
+# that X — chosen larger than any boss half-width so the boss is born just
+# off-screen-right and scrolls smoothly into view instead of popping in.
+_BOSS_X_FRACTION = 0.92
+_BOSS_SPAWN_LEAD = 600.0
+# Length (px) of a boss laser beam, long enough to cross the play area.
+_BOSS_LASER_BEAM_LEN = 1600.0
+
 # Undock liftoff: instantaneous Y kick (px/s) away from the tower, plus a
 # dock-check cooldown so the ship clears `snap_distance` before the dock
 # scanner runs again.  Direction is +Y for floor towers, -Y for ceiling
@@ -454,12 +463,12 @@ class RunLevelView(arcade.View):
         cam_left = self.window.world_camera.position.x - self.window.width / 2.0
         self._terrain.update(cam_left)
 
-        # Boss zone — single-fire when the ship reaches the reserved band.
-        if (
-            not self._boss_triggered
-            and self._boss_zone_x > 0.0
-            and self._ship.center_x >= self._boss_zone_x
-        ):
+        # Boss spawn — single-fire when the camera's right edge nears the
+        # boss X (minus a lead), so the boss is created just off-screen-right
+        # and scrolls into view rather than popping in.
+        boss_x = self._terrain_cfg.world_width * _BOSS_X_FRACTION
+        cam_right = self.window.world_camera.position.x + self.window.width / 2.0
+        if not self._boss_triggered and cam_right >= boss_x - _BOSS_SPAWN_LEAD:
             self._boss_triggered = True
             self._on_boss_zone_reached()
             return
@@ -537,6 +546,7 @@ class RunLevelView(arcade.View):
         # draw above the body.
         self._boss_body_list.draw()
         self._boss_gun_list.draw()
+        self._draw_boss_laser_beams()  # boss laser beams over the body/guns
         self._bullet_list.draw()  # player bullets above enemy bullets
         self._ship_list.draw()
         self._scratch_list.draw()
@@ -797,7 +807,7 @@ class RunLevelView(arcade.View):
         at the centre of the boss zone."""
         assert self._terrain is not None and self._terrain_cfg is not None
         settings = self._cfg.boss_settings_for(self._level_num)
-        boss_x = self._terrain_cfg.world_width * 0.92
+        boss_x = self._terrain_cfg.world_width * _BOSS_X_FRACTION
         boss = BaseBoss(
             world_x=boss_x,
             level_num=self._level_num,
@@ -888,12 +898,107 @@ class RunLevelView(arcade.View):
         if not self._boss.is_alive:
             return
 
-        # Normal update — hardpoints track + fire.
+        # Bob always; only fire weapons once the boss is actually on screen
+        # (it spawns off-screen-right and scrolls in).
+        on_screen = self._is_on_screen(self._boss.body.center_x)
         for bullet in self._boss.update(
-            self._ship.center_x, self._ship.center_y, delta_time
+            self._ship.center_x,
+            self._ship.center_y,
+            delta_time,
+            can_fire=on_screen,
         ):
             self._enemy_bullet_list.append(bullet)
             self._play_sfx(self._sm_enemy_shoot, self._snd_enemy_shoot)
+        if on_screen:
+            self._update_boss_lasers(delta_time)
+
+    def _update_boss_lasers(self, delta_time: float) -> None:
+        """Drive each laser mount's telegraph->firing->cooldown machine and
+        apply beam damage on the firing frame.  Mirrors
+        ``_update_laser_turrets`` but the gun sprite never rotates — the beam
+        is aimed at the player during idle/telegraph and locked at firing.
+        """
+        import math
+
+        assert self._boss is not None
+        cfg = self._cfg.combat
+        for hp in self._boss.hardpoints:
+            if hp.weapon_type != "laser" or not hp.is_alive:
+                continue
+
+            if hp.laser_state == "idle":
+                if hp.laser_cooldown > 0.0:
+                    hp.laser_cooldown = max(0.0, hp.laser_cooldown - delta_time)
+                else:
+                    # Lock the aim at the player NOW; the telegraph beam shows
+                    # this committed line so the player can dodge during the
+                    # warning window before it actually fires.
+                    hp.laser_aim = math.atan2(
+                        self._ship.center_y - hp.center_y,
+                        self._ship.center_x - hp.center_x,
+                    )
+                    hp.laser_state = "telegraph"
+                    hp.laser_timer = cfg.laser_telegraph_duration
+                    hp.laser_damage_dealt = False
+            elif hp.laser_state == "telegraph":
+                hp.laser_timer -= delta_time
+                if hp.laser_timer <= 0.0:
+                    hp.laser_state = "firing"
+                    hp.laser_timer = cfg.laser_beam_duration
+                    # Beam commits at this aim — damage once.
+                    if not hp.laser_damage_dealt:
+                        hp.laser_damage_dealt = True
+                        if self._ship_in_boss_beam(hp):
+                            self._damage_player(cfg.laser_beam_damage)
+                            if self._death_timer > 0.0:
+                                return
+            elif hp.laser_state == "firing":
+                hp.laser_timer -= delta_time
+                if hp.laser_timer <= 0.0:
+                    hp.laser_state = "cooldown"
+                    hp.laser_cooldown = cfg.laser_turret_fire_cooldown
+            elif hp.laser_state == "cooldown":
+                hp.laser_state = "idle"
+
+    def _ship_in_boss_beam(self, hp: BossGun) -> bool:
+        """True if the ship centre is within beam half-width of the laser
+        segment (gun centre -> beam end)."""
+        import math
+
+        x0, y0 = hp.center_x, hp.center_y
+        x1, y1 = hp.laser_beam_end(_BOSS_LASER_BEAM_LEN)
+        px, py = self._ship.center_x, self._ship.center_y
+        dx, dy = x1 - x0, y1 - y0
+        length_sq = dx * dx + dy * dy
+        if length_sq == 0.0:
+            return False
+        t = max(0.0, min(1.0, ((px - x0) * dx + (py - y0) * dy) / length_sq))
+        cx, cy = x0 + t * dx, y0 + t * dy
+        dist = math.hypot(px - cx, py - cy)
+        half_w = (self._cfg.combat.laser_beam_width / 2.0) + self._ship.width / 4.0
+        return dist <= half_w
+
+    def _draw_boss_laser_beams(self) -> None:
+        """Immediate-mode boss laser beams (world-camera space), on-screen and
+        only while the boss is alive / not in its death sequence."""
+        if self._boss is None or self._boss_death_timer > 0.0:
+            return
+        if not self._is_on_screen(self._boss.body.center_x):
+            return
+        cfg = self._cfg.combat
+        for hp in self._boss.hardpoints:
+            if hp.weapon_type != "laser" or not hp.is_alive:
+                continue
+            if hp.laser_state == "telegraph":
+                color = tuple(cfg.laser_telegraph_color)
+                width = max(1, int(cfg.laser_beam_width * 0.5))
+            elif hp.laser_state == "firing":
+                color = tuple(cfg.laser_beam_color)
+                width = int(cfg.laser_beam_width)
+            else:
+                continue
+            end_x, end_y = hp.laser_beam_end(_BOSS_LASER_BEAM_LEN)
+            arcade.draw_line(hp.center_x, hp.center_y, end_x, end_y, color, width)
 
     def _start_boss_death(self) -> None:
         """Hide the boss + guns and begin the explosion sequence."""

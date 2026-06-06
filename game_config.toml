@@ -113,6 +113,46 @@ offset = [19, 172]
 type = "cannon"
 hp = 3
 
+# Level-2 boss — "dreadnought mk1": body 200x160, two side cannons + two
+# laser cannons (all fire left).  Offsets are the weapon top-left within the
+# body's native grid; the _a sprites are reused for both A/B mounts.
+[boss.alpha]
+body_sprite = "assets/images/PNG/Bosses/boss_alpha_body.png"
+scale_factor = 3.0             # level 2 has a ceiling — smaller than default
+hp_base = 40                   # body HP at level 1 (this boss debuts at lvl 2)
+hp_per_level = 10
+fire_cooldown = 1.2            # seconds between each cannon shot
+bullet_speed = 220.0
+death_duration = 2.5
+death_explosion_interval = 0.25
+oscillation_amplitude = 120.0
+oscillation_speed = 0.6
+oscillation_min_room = 60.0
+
+[[boss.alpha.weapons]]
+sprite = "assets/images/PNG/Bosses/boss_alpha_side_gun_a.png"
+offset = [0, -14]
+type = "cannon"
+hp = 3
+
+[[boss.alpha.weapons]]
+sprite = "assets/images/PNG/Bosses/boss_alpha_side_gun_a.png"
+offset = [0, 130]
+type = "cannon"
+hp = 3
+
+[[boss.alpha.weapons]]
+sprite = "assets/images/PNG/Bosses/boss_alpha_laser_a.png"
+offset = [-26, 35]
+type = "laser"
+hp = 4
+
+[[boss.alpha.weapons]]
+sprite = "assets/images/PNG/Bosses/boss_alpha_laser_a.png"
+offset = [-26, 89]
+type = "laser"
+hp = 4
+
 [terrain]
 chunk_width = 32
 cull_buffer_chunks = 3
@@ -228,7 +268,7 @@ terrain_half_width = 280.0
 ceiling_present = true
 terrain_renderer = "polygon"
 terrain_seed = 0
-boss = "default"
+boss = "alpha"
 
 [level_3]
 world_width = 6400

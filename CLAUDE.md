@@ -726,8 +726,9 @@ in Phase 5.  Do not re-add `_PHASE*_*_POSITIONS` lists.
   resolves it, falling back to `"default"`.  Do NOT re-add boss fields to
   `[combat]` — they were migrated out.
 - To add a boss: drop its PNGs in `assets/images/…`, add `[boss.<key>]`
-  + weapons, point a level at it.  (Next up: `[boss.alpha]` on level 2 —
-  body 200×160, two 44×44 cannons + two 70×36 lasers.)
+  + weapons, point a level at it.  `[boss.alpha]` (level 2) is the worked
+  example — body 200×160, two 44×44 cannons + two 70×36 lasers, art from
+  the SVG pipeline under `assets/images/PNG/Bosses/`.
 
 ### BaseBoss / BossGun
 - `src/base_attackers/bosses/boss.py`.  Composite — NOT an
@@ -743,10 +744,19 @@ in Phase 5.  Do not re-add `_PHASE*_*_POSITIONS` lists.
   gw/2`, `body_top − offset_y*scale − gh/2`), HP from the weapon.
 - **Two-step placement**: construct, then `boss.place(center_y)` once
   `body.height` is known (it calls `_attach_hardpoints`).
-- `BaseBoss.update()` applies the bob via `_apply_oscillation`, then ticks
-  live guns; only `weapon_type == "cannon"` mounts fire (aimed at the
-  player from the gun centre — sprite never rotates).  Lasers tick but do
-  not shoot yet.
+- `BaseBoss.update(..., can_fire)` applies the bob via `_apply_oscillation`,
+  then ticks the **cannon** mounts; a cannon emits a player-aimed bullet
+  only when `can_fire` (the sprite never rotates).  **Laser** mounts are
+  NOT fired here — the view drives them (it holds the laser timings).
+- **Boss lasers** (`weapon_type == "laser"`): `BossGun` carries the
+  per-mount `laser_*` state (idle→telegraph→firing→cooldown) +
+  `laser_beam_end()`.  `RunLevelView._update_boss_lasers` runs the machine
+  on `cfg.combat.laser_*` timings: the aim is **locked at the player when
+  the telegraph starts** (so the warning beam is dodgeable), damage is
+  applied once on the telegraph→firing transition via `_ship_in_boss_beam`
+  (point-to-segment, shield-aware).  `_draw_boss_laser_beams` draws the
+  telegraph/firing line (`arcade.draw_line`, world space) after the gun
+  list.  Both are gated to on-screen.
 - **Vertical bob**: `set_oscillation(amplitude, speed)` after `place()`.
   `_spawn_boss` computes the vertical band (floor↔ceiling, or floor↔world-
   top when open), centres the boss, clamps amplitude to `band/2`; a band
@@ -766,7 +776,13 @@ in Phase 5.  Do not re-add `_PHASE*_*_POSITIONS` lists.
   `_enemy_bullet_list`.  Boss bullets are NOT time-limited — the cull loop
   (`_update_turrets`) special-cases `BossBullet` to cull on leaving the
   camera viewport (or terrain), so the player can't back out of range.
-- `_on_boss_zone_reached` → `_spawn_boss` (boss at `world_width*0.92`).
+- **Spawn-scroll-in**: the boss sits at `world_width*_BOSS_X_FRACTION`
+  (0.92) and is spawned once the camera's right edge comes within
+  `_BOSS_SPAWN_LEAD` (~600 px, > any boss half-width) of that X — so it is
+  born just off-screen-right and scrolls into view instead of popping in.
+  `_update_boss` gates firing on `_is_on_screen(boss.body.center_x)`
+  (`can_fire`/laser updates only once visible); the bob runs regardless.
+  `_on_boss_zone_reached` → `_spawn_boss`.
   `_update_boss` runs in `on_update` after the laser turrets; while
   `_boss_death_timer > 0` the death sequence owns the frame (early
   return).  `_finish_boss_death` is the ONLY boss path to
