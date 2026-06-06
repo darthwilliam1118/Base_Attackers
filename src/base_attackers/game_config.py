@@ -92,23 +92,102 @@ class CombatSettings:
     laser_telegraph_color: list[int] = field(
         default_factory=lambda: [255, 180, 60, 120]
     )
-    # Boss
-    boss_scale_factor: float = 3.0  # boss sprite = sprite_scale * this
-    boss_hp_base: int = 30  # HP at level 1
-    boss_hp_per_level: int = 10  # additional HP per level above 1
-    boss_hardpoint_count: int = 3  # (legacy) — gun count now from positions
-    # Top-left pixel of each boss_gun.png within the body's native 224x256
-    # grid.  Count of entries = number of guns.
-    boss_gun_positions: list[list[float]] = field(
-        default_factory=lambda: [[19.0, 69.0], [19.0, 172.0]]
+
+
+@dataclass
+class BossWeapon:
+    """One weapon mount on a boss.
+
+    ``offset_x`` / ``offset_y`` are the weapon sprite's top-left pixel
+    relative to the boss body's top-left (native px; may be negative so a
+    weapon can protrude past the body).  ``weapon_type`` of ``"cannon"``
+    fires aimed bullets; ``"laser"`` is recognised by the schema but does
+    not fire yet (beam firing arrives with the level-2 boss).
+    """
+
+    sprite: str
+    offset_x: float
+    offset_y: float
+    weapon_type: str = "cannon"  # "cannon" | "laser"
+    fires: str = "left"
+    hp: int = 3
+
+
+@dataclass
+class BossSettings:
+    """A complete per-boss definition (one ``[boss.<key>]`` TOML section).
+
+    Levels select a boss by key via ``[level_N] boss = "<key>"`` (see
+    ``GameConfig.boss_settings_for``).
+    """
+
+    body_sprite: str = "assets/images/PNG/Enemies/boss_body.png"
+    scale_factor: float = 4.0  # boss sprite = sprite_scale * this
+    hp_base: int = 30  # body HP at level 1
+    hp_per_level: int = 10  # additional body HP per level above 1
+    fire_cooldown: float = 1.2  # seconds between each cannon shot
+    bullet_speed: float = 220.0
+    death_duration: float = 2.5  # seconds of death explosions
+    death_explosion_interval: float = 0.25  # seconds between death explosions
+    oscillation_amplitude: float = 120.0  # max px the boss bobs up/down
+    oscillation_speed: float = 0.6  # rad/s of the sine (slow smooth bob)
+    oscillation_min_room: float = 60.0  # min vertical band to enable the bob
+    weapons: list[BossWeapon] = field(default_factory=list)
+
+
+def _default_bosses() -> dict[str, "BossSettings"]:
+    """Built-in ``"default"`` boss — the original level-1 boss (boss_body
+    + two boss_gun cannons).  TOML ``[boss.default]`` overrides this."""
+    return {
+        "default": BossSettings(
+            weapons=[
+                BossWeapon(
+                    "assets/images/PNG/Enemies/boss_gun.png", 19.0, 69.0, "cannon"
+                ),
+                BossWeapon(
+                    "assets/images/PNG/Enemies/boss_gun.png", 19.0, 172.0, "cannon"
+                ),
+            ]
+        )
+    }
+
+
+def _parse_boss(braw: dict) -> "BossSettings":
+    """Build a BossSettings from one ``[boss.<key>]`` TOML table."""
+    d = BossSettings
+    weapons: list[BossWeapon] = []
+    for wraw in braw.get("weapons", []):
+        off = wraw.get("offset", [0.0, 0.0])
+        weapons.append(
+            BossWeapon(
+                sprite=str(wraw.get("sprite", "")),
+                offset_x=float(off[0]),
+                offset_y=float(off[1]),
+                weapon_type=str(wraw.get("type", BossWeapon.weapon_type)),
+                fires=str(wraw.get("fires", BossWeapon.fires)),
+                hp=int(wraw.get("hp", BossWeapon.hp)),
+            )
+        )
+    return BossSettings(
+        body_sprite=str(braw.get("body_sprite", d.body_sprite)),
+        scale_factor=float(braw.get("scale_factor", d.scale_factor)),
+        hp_base=int(braw.get("hp_base", d.hp_base)),
+        hp_per_level=int(braw.get("hp_per_level", d.hp_per_level)),
+        fire_cooldown=float(braw.get("fire_cooldown", d.fire_cooldown)),
+        bullet_speed=float(braw.get("bullet_speed", d.bullet_speed)),
+        death_duration=float(braw.get("death_duration", d.death_duration)),
+        death_explosion_interval=float(
+            braw.get("death_explosion_interval", d.death_explosion_interval)
+        ),
+        oscillation_amplitude=float(
+            braw.get("oscillation_amplitude", d.oscillation_amplitude)
+        ),
+        oscillation_speed=float(braw.get("oscillation_speed", d.oscillation_speed)),
+        oscillation_min_room=float(
+            braw.get("oscillation_min_room", d.oscillation_min_room)
+        ),
+        weapons=weapons,
     )
-    boss_fire_cooldown: float = 1.2  # seconds between each hardpoint shot
-    boss_bullet_speed: float = 220.0
-    boss_death_duration: float = 2.5  # seconds of death explosions
-    boss_death_explosion_interval: float = 0.25  # seconds between explosions
-    boss_oscillation_amplitude: float = 120.0  # max px the boss bobs up/down
-    boss_oscillation_speed: float = 0.6  # rad/s of the sine (slow smooth bob)
-    boss_oscillation_min_room: float = 60.0  # min vertical band to enable bob
 
 
 @dataclass
@@ -152,6 +231,7 @@ class LevelSettings:
     ceiling_present: bool = False
     terrain_renderer: str = "tile"  # "tile" | "polygon"
     terrain_seed: int = 0  # 0 means random per run
+    boss: str = "default"  # [boss.<key>] this level spawns at its boss zone
 
 
 @dataclass
@@ -203,6 +283,14 @@ class GameConfig(BaseGameConfig):
     terrain: TerrainSettings = field(default_factory=TerrainSettings)
     level_gen: LevelGenSettings = field(default_factory=LevelGenSettings)
     levels: dict[int, LevelSettings] = field(default_factory=dict)
+    bosses: dict[str, BossSettings] = field(default_factory=_default_bosses)
+
+    def boss_settings_for(self, level_num: int) -> BossSettings:
+        """Resolve the boss for *level_num* via its ``boss`` key, falling
+        back to the ``"default"`` boss (and a bare BossSettings if even
+        that is somehow missing)."""
+        key = self.level_settings_for(level_num).boss
+        return self.bosses.get(key) or self.bosses.get("default") or BossSettings()
 
     def level_settings_for(self, level_num: int) -> LevelSettings:
         """Explicit ``[level_N]`` settings if configured, else generated
@@ -427,61 +515,13 @@ class GameConfig(BaseGameConfig):
                     "laser_telegraph_color", CombatSettings().laser_telegraph_color
                 )
             ),
-            boss_scale_factor=float(
-                combat_raw.get("boss_scale_factor", CombatSettings.boss_scale_factor)
-            ),
-            boss_hp_base=int(
-                combat_raw.get("boss_hp_base", CombatSettings.boss_hp_base)
-            ),
-            boss_hp_per_level=int(
-                combat_raw.get("boss_hp_per_level", CombatSettings.boss_hp_per_level)
-            ),
-            boss_hardpoint_count=int(
-                combat_raw.get(
-                    "boss_hardpoint_count", CombatSettings.boss_hardpoint_count
-                )
-            ),
-            boss_gun_positions=[
-                [float(p[0]), float(p[1])]
-                for p in combat_raw.get(
-                    "boss_gun_positions", CombatSettings().boss_gun_positions
-                )
-            ],
-            boss_fire_cooldown=float(
-                combat_raw.get("boss_fire_cooldown", CombatSettings.boss_fire_cooldown)
-            ),
-            boss_bullet_speed=float(
-                combat_raw.get("boss_bullet_speed", CombatSettings.boss_bullet_speed)
-            ),
-            boss_death_duration=float(
-                combat_raw.get(
-                    "boss_death_duration", CombatSettings.boss_death_duration
-                )
-            ),
-            boss_death_explosion_interval=float(
-                combat_raw.get(
-                    "boss_death_explosion_interval",
-                    CombatSettings.boss_death_explosion_interval,
-                )
-            ),
-            boss_oscillation_amplitude=float(
-                combat_raw.get(
-                    "boss_oscillation_amplitude",
-                    CombatSettings.boss_oscillation_amplitude,
-                )
-            ),
-            boss_oscillation_speed=float(
-                combat_raw.get(
-                    "boss_oscillation_speed", CombatSettings.boss_oscillation_speed
-                )
-            ),
-            boss_oscillation_min_room=float(
-                combat_raw.get(
-                    "boss_oscillation_min_room",
-                    CombatSettings.boss_oscillation_min_room,
-                )
-            ),
         )
+        # Per-boss definitions: built-in "default" overridden/extended by
+        # any [boss.<key>] TOML sections.
+        bosses = _default_bosses()
+        for boss_key, boss_raw in data.get("boss", {}).items():
+            if isinstance(boss_raw, dict):
+                bosses[str(boss_key)] = _parse_boss(boss_raw)
         weights_raw = powerups_raw.get("weights", {})
         weights: dict[str, dict[str, int]] = {}
         for level_key, table in weights_raw.items():
@@ -677,6 +717,7 @@ class GameConfig(BaseGameConfig):
                     raw.get("terrain_renderer", LevelSettings.terrain_renderer)
                 ),
                 terrain_seed=int(raw.get("terrain_seed", LevelSettings.terrain_seed)),
+                boss=str(raw.get("boss", LevelSettings.boss)),
             )
 
         return cls(
@@ -698,6 +739,7 @@ class GameConfig(BaseGameConfig):
             terrain=terrain,
             level_gen=level_gen,
             levels=levels,
+            bosses=bosses,
         )
 
     def save(self, path: Optional[Path] = None) -> None:

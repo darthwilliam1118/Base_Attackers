@@ -793,14 +793,15 @@ class RunLevelView(arcade.View):
         self._spawn_boss()
 
     def _spawn_boss(self) -> None:
-        """Construct + place the boss at the centre of the boss zone."""
+        """Construct + place the boss for this level (resolved from config)
+        at the centre of the boss zone."""
         assert self._terrain is not None and self._terrain_cfg is not None
-        cfg = self._cfg.combat
+        settings = self._cfg.boss_settings_for(self._level_num)
         boss_x = self._terrain_cfg.world_width * 0.92
         boss = BaseBoss(
             world_x=boss_x,
             level_num=self._level_num,
-            cfg=cfg,
+            settings=settings,
             sprite_scale=self._cfg.sprite_scale,
         )
         # Two-step: set Y once body.height is known.  The boss bobs slowly
@@ -816,9 +817,9 @@ class RunLevelView(arcade.View):
         bottom_limit = floor_y + half_h + clearance
         top_limit = top_y - half_h - clearance
         band = top_limit - bottom_limit
-        if band >= cfg.boss_oscillation_min_room:
+        if band >= settings.oscillation_min_room:
             center_y = (bottom_limit + top_limit) / 2.0
-            amplitude = min(cfg.boss_oscillation_amplitude, band / 2.0)
+            amplitude = min(settings.oscillation_amplitude, band / 2.0)
         else:
             # No room — fall back to the original stationary placement.
             center_y = (
@@ -828,7 +829,7 @@ class RunLevelView(arcade.View):
             )
             amplitude = 0.0
         boss.place(center_y)
-        boss.set_oscillation(amplitude, cfg.boss_oscillation_speed)
+        boss.set_oscillation(amplitude, settings.oscillation_speed)
 
         self._boss_body_list.append(boss.body)
         for hp in boss.hardpoints:
@@ -876,7 +877,7 @@ class RunLevelView(arcade.View):
             self._boss_explosion_timer -= delta_time
             if self._boss_explosion_timer <= 0.0:
                 self._boss_explosion_timer = (
-                    self._cfg.combat.boss_death_explosion_interval
+                    self._boss.settings.death_explosion_interval
                 )
                 self._spawn_boss_death_explosion()
             self._explosion_list.update(delta_time)
@@ -900,7 +901,7 @@ class RunLevelView(arcade.View):
         self._boss.body.visible = False
         for hp in self._boss.hardpoints:
             hp.sprite.visible = False
-        self._boss_death_timer = self._cfg.combat.boss_death_duration
+        self._boss_death_timer = self._boss.settings.death_duration
         self._boss_explosion_timer = 0.0  # first explosion immediately
 
     def _spawn_boss_death_explosion(self) -> None:

@@ -1,18 +1,22 @@
-"""BaseBoss — large boss enemy with destructible gun hardpoints.
+"""BaseBoss — large boss enemy with destructible weapon hardpoints.
 
 Composite object (NOT itself an ``arcade.Sprite``).  Owns a ``body``
-sprite and ``hardpoints`` (a list of ``BossGun`` — single fixed
-``boss_gun.png`` sprites, no base, no rotation).  ``RunLevelView`` owns
-the SpriteLists and the collision/draw wiring:
+sprite and ``hardpoints`` (a list of ``BossGun`` — single fixed weapon
+sprites, no base, no rotation).  ``RunLevelView`` owns the SpriteLists and
+the collision/draw wiring:
 - the body goes into ``_boss_body_list``,
-- each gun sprite goes into ``_boss_gun_list`` (drawn ABOVE the body, and
-  ABOVE the enemy-bullet list so boss bullets emerge from under the gun).
+- each weapon sprite goes into ``_boss_gun_list`` (drawn ABOVE the body,
+  and ABOVE the enemy-bullet list so boss bullets emerge from under it).
 
-Gun positions come from ``cfg.boss_gun_positions`` — top-left pixel
-offsets within the body's native ``224x256`` grid — so the art alignment
-is data-driven (per-boss tunable).  Guns scale with the body and bob with
-it; each fires on ``boss_fire_cooldown`` and the boss aims every shot at
-the player's current position (the gun sprite itself never rotates).
+A boss is fully described by a ``BossSettings`` (one ``[boss.<key>]`` TOML
+section, selected per level via ``[level_N] boss = "<key>"``): body sprite,
+scale, HP, fire cadence, oscillation, and a list of ``BossWeapon`` mounts.
+Each mount's offset is the weapon sprite's top-left pixel relative to the
+body's top-left (native px, may be negative), converted here to a
+world-space centre.  Weapons scale with the body and bob with it.
+``"cannon"`` mounts fire bullets aimed at the player (the sprite never
+rotates); ``"laser"`` mounts are created/destructible/drawn but do NOT
+fire yet (beam firing arrives with the level-2 boss).
 
 Placement is the two-step construct + position pattern: the body sprite
 height is only known after the texture loads, so the caller builds the
@@ -27,10 +31,8 @@ import arcade
 
 from agf.paths import resource_path
 from src.base_attackers.combat.enemy_bullet import EnemyBullet
-from src.base_attackers.game_config import CombatSettings
+from src.base_attackers.game_config import BossSettings
 
-_BODY_SPRITE = "assets/images/PNG/Enemies/boss_body.png"
-_GUN_SPRITE = "assets/images/PNG/Enemies/boss_gun.png"
 _BOSS_BULLET_PATH = "assets/images/PNG/Lasers/boss_shot1.png"
 # boss_shot1.png renders facing east at angle 0 (same convention as
 # EnemyBullet's laserRed01).  Flip this if a swapped asset points elsewhere.
@@ -38,10 +40,10 @@ _BULLET_NATURAL_BEARING_DEG = 0.0
 
 
 class BossGun:
-    """A single fixed boss gun — one ``boss_gun.png`` sprite, no base, no
-    rotation.  Destructible (its own HP / explosion / score) and fires on
-    the boss cadence; the boss aims each shot at the player.  Replaces the
-    old ``GunTurret`` (base + rotating barrel) hardpoint.
+    """A single fixed boss weapon mount — one sprite, no base, no rotation.
+    Destructible (its own HP / explosion / score).  ``weapon_type ==
+    "cannon"`` fires bullets aimed by the boss at the player; ``"laser"``
+    is drawn/destructible but does not fire yet.
     """
 
     def __init__(
@@ -50,10 +52,12 @@ class BossGun:
         scale: float,
         hp: int,
         fire_period: float,
+        weapon_type: str = "cannon",
         initial_cooldown: float = 0.0,
     ) -> None:
         self.sprite = arcade.Sprite(texture, scale=scale)
         self.hp = hp
+        self.weapon_type = weapon_type
         self._fire_period = fire_period
         self._fire_cooldown = initial_cooldown
 
@@ -124,20 +128,20 @@ class BaseBoss:
         self,
         world_x: float,
         level_num: int,
-        cfg: CombatSettings,
+        settings: BossSettings,
         sprite_scale: float,
     ) -> None:
-        self.cfg = cfg
+        self.settings = settings
         self.level_num = level_num
 
         # HP scales with level.
-        self.max_hp: int = cfg.boss_hp_base + (level_num - 1) * cfg.boss_hp_per_level
+        self.max_hp: int = settings.hp_base + (level_num - 1) * settings.hp_per_level
         self.hp: int = self.max_hp
 
         # Body sprite — large, centred in the boss zone.  center_y is a
         # placeholder until place() runs (body.height known after load).
-        boss_scale = sprite_scale * cfg.boss_scale_factor
-        self.body = arcade.Sprite(resource_path(_BODY_SPRITE), scale=boss_scale)
+        boss_scale = sprite_scale * settings.scale_factor
+        self.body = arcade.Sprite(resource_path(settings.body_sprite), scale=boss_scale)
         self.body.center_x = world_x
         self.body.center_y = 0.0
 
@@ -183,38 +187,40 @@ class BaseBoss:
         self._attach_hardpoints()
 
     def _attach_hardpoints(self) -> None:
-        """Create one ``BossGun`` per ``cfg.boss_gun_positions`` entry.
+        """Create one ``BossGun`` per ``settings.weapons`` entry.
 
-        Each position is the gun sprite's top-left pixel within the body's
-        native 224x256 grid.  Converted here to a world-space gun centre
-        (the body renders at ``_boss_scale``, y is up, sprites are
-        centre-anchored).  Fire cooldowns are staggered so the guns don't
-        all fire on the same frame.
+        Each weapon's offset is its sprite's top-left pixel relative to the
+        body's top-left (native px, may be negative).  Converted here to a
+        world-space centre (the body renders at ``_boss_scale``, y is up,
+        sprites are centre-anchored; each weapon scales with the body and
+        uses its own sprite dimensions).  Cannon cooldowns are staggered so
+        the guns don't all fire on the same frame.
         """
-        cfg = self.cfg
         scale = self._boss_scale
         # Body top-left in world space (y up).
         body_left = self.body.center_x - self.body.width / 2.0
         body_top = self.body.center_y + self.body.height / 2.0
 
-        gun_tex = arcade.load_texture(
-            resource_path(_GUN_SPRITE), hit_box_algorithm=arcade.hitbox.algo_simple
-        )
-        positions = cfg.boss_gun_positions
-        count = max(1, len(positions))
-        for i, (px, py) in enumerate(positions):
+        weapons = self.settings.weapons
+        count = max(1, len(weapons))
+        for i, weapon in enumerate(weapons):
+            tex = arcade.load_texture(
+                resource_path(weapon.sprite),
+                hit_box_algorithm=arcade.hitbox.algo_simple,
+            )
             gun = BossGun(
-                texture=gun_tex,
+                texture=tex,
                 scale=scale,
-                hp=cfg.turret_hp,
-                fire_period=cfg.boss_fire_cooldown,
+                hp=weapon.hp,
+                fire_period=self.settings.fire_cooldown,
+                weapon_type=weapon.weapon_type,
                 # Stagger so the guns alternate rather than fire in unison.
-                initial_cooldown=cfg.boss_fire_cooldown * (i + 1) / count,
+                initial_cooldown=self.settings.fire_cooldown * (i + 1) / count,
             )
             gw = gun.sprite.width
             gh = gun.sprite.height
-            gun.sprite.center_x = body_left + px * scale + gw / 2.0
-            gun.sprite.center_y = body_top - py * scale - gh / 2.0
+            gun.sprite.center_x = body_left + weapon.offset_x * scale + gw / 2.0
+            gun.sprite.center_y = body_top - weapon.offset_y * scale - gh / 2.0
             self.hardpoints.append(gun)
 
     def set_oscillation(self, amplitude: float, speed: float) -> None:
@@ -259,7 +265,9 @@ class BaseBoss:
         for hp in self.hardpoints:
             if not hp.is_alive:
                 continue
-            if hp.update(delta_time):
+            ready = hp.update(delta_time)
+            # Only cannons fire for now; lasers tick but don't shoot yet.
+            if ready and hp.weapon_type == "cannon":
                 # Fixed gun — aim the shot at the player's current position.
                 angle_rad = math.atan2(ship_y - hp.center_y, ship_x - hp.center_x)
                 bullets.append(
@@ -267,9 +275,8 @@ class BaseBoss:
                         x=hp.center_x,
                         y=hp.center_y,
                         angle_rad=angle_rad,
-                        speed=self.cfg.boss_bullet_speed,
+                        speed=self.settings.bullet_speed,
                         scale=self._sprite_scale,
-                        lifetime=self.cfg.enemy_bullet_lifetime,
                     )
                 )
         return bullets

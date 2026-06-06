@@ -80,21 +80,38 @@ laser_proximity_trigger = 260.0  # px — turret activates when ship is within
 laser_beam_color = [255, 60, 60, 220]   # RGBA
 laser_telegraph_color = [255, 180, 60, 120]   # RGBA dim orange
 
-# Boss
-boss_scale_factor = 4.0        # boss sprite = sprite_scale * this
-boss_hp_base = 30              # HP at level 1
-boss_hp_per_level = 10         # additional HP per level above 1
-boss_hardpoint_count = 3       # (legacy) gun count now comes from positions
-# Top-left px of each boss_gun.png within boss_body.png's native 224x256
-# grid.  Two entries => two guns.
-boss_gun_positions = [[19, 69], [19, 172]]
-boss_fire_cooldown = 1.2       # seconds between each hardpoint shot
-boss_bullet_speed = 220.0      # px/s — slightly slower than turret bullets
-boss_death_duration = 2.5      # seconds of death explosions before level complete
-boss_death_explosion_interval = 0.25  # seconds between death explosions
-boss_oscillation_amplitude = 120.0  # max px the boss bobs up/down (sine)
-boss_oscillation_speed = 0.6   # rad/s of the bob — lower is slower/smoother
-boss_oscillation_min_room = 60.0  # min floor-ceiling band (px) to enable bob
+# (Boss settings moved to per-boss [boss.<key>] sections below.)
+
+# Per-boss definitions.  A level spawns the boss named by its
+# [level_N] boss = "<key>" (default "default").  Add more bosses as
+# [boss.<key>] and point levels at them.
+[boss.default]
+body_sprite = "assets/images/PNG/Enemies/boss_body.png"
+scale_factor = 4.0             # boss sprite = sprite_scale * this
+hp_base = 30                   # body HP at level 1
+hp_per_level = 10              # additional body HP per level above 1
+fire_cooldown = 1.2            # seconds between each cannon shot
+bullet_speed = 220.0           # px/s — slightly slower than turret bullets
+death_duration = 2.5           # seconds of death explosions before level complete
+death_explosion_interval = 0.25
+oscillation_amplitude = 120.0  # max px the boss bobs up/down (sine)
+oscillation_speed = 0.6        # rad/s of the bob — lower is slower/smoother
+oscillation_min_room = 60.0    # min floor-ceiling band (px) to enable bob
+
+# Weapon mounts.  offset = top-left px of the weapon sprite relative to the
+# body's top-left (native px, may be negative).  type = "cannon" | "laser"
+# (laser is schema-only for now — does not fire yet).
+[[boss.default.weapons]]
+sprite = "assets/images/PNG/Enemies/boss_gun.png"
+offset = [19, 69]
+type = "cannon"
+hp = 3
+
+[[boss.default.weapons]]
+sprite = "assets/images/PNG/Enemies/boss_gun.png"
+offset = [19, 172]
+type = "cannon"
+hp = 3
 
 [terrain]
 chunk_width = 32
@@ -200,6 +217,7 @@ terrain_half_width = 280.0
 ceiling_present = false
 terrain_renderer = "polygon"
 terrain_seed = 0
+boss = "default"
 
 [level_2]
 world_width = 6400
@@ -210,6 +228,7 @@ terrain_half_width = 280.0
 ceiling_present = true
 terrain_renderer = "polygon"
 terrain_seed = 0
+boss = "default"
 
 [level_3]
 world_width = 6400
@@ -220,3 +239,4 @@ terrain_half_width = 250.0
 ceiling_present = true
 terrain_renderer = "tile"
 terrain_seed = 0
+boss = "default"
