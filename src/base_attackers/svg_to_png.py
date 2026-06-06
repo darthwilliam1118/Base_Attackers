@@ -29,15 +29,17 @@ PNG_DIR = Path("assets/images")
 # These match the sizes defined in the sprite sheet.
 # Add new bosses here as you create them.
 BOSS_SPRITES = [
-    ("boss_alpha_body.svg",       200, 160),
-    ("boss_alpha_side_gun_a.svg",  44,  44),
-    ("boss_alpha_side_gun_b.svg",  44,  44),
-    ("boss_alpha_laser_a.svg",     70,  36),
-    ("boss_alpha_laser_b.svg",     70,  36),
+    ("boss_alpha_body.svg", 200, 160),
+    ("boss_alpha_side_gun_a.svg", 44, 44),
+    ("boss_alpha_side_gun_b.svg", 44, 44),
+    ("boss_alpha_laser_a.svg", 70, 36),
+    ("boss_alpha_laser_b.svg", 70, 36),
 ]
 
 
-def convert_file(svg_path: Path, png_path: Path, width: int, height: int, scale: float = 1.0) -> None:
+def convert_file(
+    svg_path: Path, png_path: Path, width: int, height: int, scale: float = 1.0
+) -> None:
     """Convert a single SVG to PNG at the given dimensions."""
     out_w = int(width * scale)
     out_h = int(height * scale)
@@ -104,10 +106,27 @@ def convert_single(svg_path: Path, scale: float) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Convert SVG game assets to PNG")
-    parser.add_argument("files", nargs="*", help="SVG file(s) to convert (omit to convert all)")
-    parser.add_argument("--scale", type=float, default=1.0, help="Scale factor, e.g. 2 for 2x (default: 1.0)")
-    parser.add_argument("--svg-dir", type=Path, default=SVG_DIR, help=f"SVG source dir (default: {SVG_DIR})")
-    parser.add_argument("--png-dir", type=Path, default=PNG_DIR, help=f"PNG output dir (default: {PNG_DIR})")
+    parser.add_argument(
+        "files", nargs="*", help="SVG file(s) to convert (omit to convert all)"
+    )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=1.0,
+        help="Scale factor, e.g. 2 for 2x (default: 1.0)",
+    )
+    parser.add_argument(
+        "--svg-dir",
+        type=Path,
+        default=SVG_DIR,
+        help=f"SVG source dir (default: {SVG_DIR})",
+    )
+    parser.add_argument(
+        "--png-dir",
+        type=Path,
+        default=PNG_DIR,
+        help=f"PNG output dir (default: {PNG_DIR})",
+    )
     args = parser.parse_args()
 
     if args.files:
