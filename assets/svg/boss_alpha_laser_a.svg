@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 70 36" width="70" height="36">
+  <!-- cannon body -->
+  <rect x="26" y="8" width="44" height="20" rx="3" fill="#b0b090" stroke="#3a7a3a" stroke-width="1.5"/>
+  <rect x="29" y="11" width="16" height="14" rx="1" fill="#888868"/>
+  <rect x="47" y="11" width="20" height="14" rx="1" fill="#989878"/>
+  <rect x="50" y="13" width="5" height="10" rx="1" fill="#5a5a3a"/>
+  <rect x="57" y="13" width="5" height="10" rx="1" fill="#3a7a3a"/>
+  <rect x="31" y="13" width="10" height="10" rx="1" fill="#3a5a3a"/>
+  <!-- muzzle flash indicators -->
+  <rect x="26" y="12" width="6" height="6" fill="#6aaa6a"/>
+  <rect x="26" y="18" width="6" height="6" fill="#4a8a4a"/>
+  <!-- barrel segments pointing left -->
+  <rect x="8" y="14" width="20" height="4" rx="1" fill="#7a7a5a" stroke="#3a7a3a" stroke-width="0.5"/>
+  <rect x="8" y="18" width="20" height="4" rx="1" fill="#5a5a3a" stroke="#3a7a3a" stroke-width="0.5"/>
+  <!-- barrel tip -->
+  <rect x="0" y="15" width="10" height="3" fill="#9aaa4a"/>
+  <rect x="0" y="19" width="10" height="3" fill="#9aaa4a"/>
+</svg>
