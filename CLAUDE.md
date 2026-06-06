@@ -710,55 +710,70 @@ in Phase 5.  Do not re-add `_PHASE*_*_POSITIONS` lists.
 
 ## Boss — Phase 8 additions (Base Attackers specific)
 
-### BaseBoss
-- `src/base_attackers/bosses/boss.py`.  Composite (like `GunTurret`/
-  `LaserTurret`) — NOT an `arcade.Sprite`.  Owns `body` (`arcade.Sprite`,
-  scale = `sprite_scale * boss_scale_factor`) and `hardpoints`
-  (`list[GunTurret]`).  HP = `boss_hp_base + (level-1)*boss_hp_per_level`
-  (level 1 = 30, level 5 = 70).  Stationary — no movement.
+### Config-driven bosses (per level)
+- A boss is fully described by a **`BossSettings`** (`game_config.py`):
+  `body_sprite`, `scale_factor`, `hp_base`/`hp_per_level`, `fire_cooldown`,
+  `bullet_speed`, `death_duration`/`death_explosion_interval`,
+  `oscillation_{amplitude,speed,min_room}`, and `weapons:
+  list[BossWeapon]`.  Each `BossWeapon` = `sprite`, `offset_x/offset_y`
+  (weapon sprite top-left rel. body top-left, native px, may be negative),
+  `weapon_type` (`"cannon"`|`"laser"`), `fires`, `hp`.
+- TOML: one `[boss.<key>]` section per boss + `[[boss.<key>.weapons]]`
+  array-of-tables (`offset = [x, y]`, `type = "cannon"`).  Built-in
+  `"default"` (from `_default_bosses()`) is the original level-1 boss;
+  `[boss.default]` in the TOML overrides it.  A level picks its boss via
+  `[level_N] boss = "<key>"`; `GameConfig.boss_settings_for(level_num)`
+  resolves it, falling back to `"default"`.  Do NOT re-add boss fields to
+  `[combat]` — they were migrated out.
+- To add a boss: drop its PNGs in `assets/images/…`, add `[boss.<key>]`
+  + weapons, point a level at it.  (Next up: `[boss.alpha]` on level 2 —
+  body 200×160, two 44×44 cannons + two 70×36 lasers.)
+
+### BaseBoss / BossGun
+- `src/base_attackers/bosses/boss.py`.  Composite — NOT an
+  `arcade.Sprite`.  `BaseBoss(world_x, level_num, settings: BossSettings,
+  sprite_scale)`; owns `body` (scale = `sprite_scale *
+  settings.scale_factor`) and `hardpoints` (`list[BossGun]`).  HP =
+  `settings.hp_base + (level-1)*settings.hp_per_level`.  `self.settings`
+  is stored so `RunLevelView` reads death/oscillation timings from it.
+- **`BossGun`** is a single fixed weapon sprite (no base, no rotation,
+  destructible) with a `weapon_type`.  `_attach_hardpoints` builds one per
+  `settings.weapons`, loading each weapon's own texture (varied sizes ok),
+  placing it by the top-left→centre math (`body_left + offset_x*scale +
+  gw/2`, `body_top − offset_y*scale − gh/2`), HP from the weapon.
 - **Two-step placement**: construct, then `boss.place(center_y)` once
-  `body.height` is known; `place` also calls `_attach_hardpoints()` so
-  hardpoint offsets are relative to the final body centre.  Hardpoints
-  float (positions set directly, NOT `position_on_terrain`).  Offset
-  multipliers `hw*0.4`/`hh*0.5` are art-tunable.
-- `_BossCombatSettings` shim wraps `CombatSettings` and overrides only
-  `turret_fire_cooldown` → `boss_fire_cooldown`, so hardpoint
-  `GunTurret`s reuse the stock class on the boss cadence.
-- `BaseBoss.update()` first applies a slow vertical sine bob (if enabled)
-  via `_apply_oscillation`, then ticks live hardpoints and returns the
-  `BossBullet`s fired this frame (built from `hp._aim_angle`).
-- **Vertical bob**: `set_oscillation(amplitude, speed)` is called after
-  `place()` so `body.center_y` is the bob centre.  `_spawn_boss` computes
-  the available vertical band (floor↔ceiling, or floor↔world-top when
-  open), centres the boss in it, and clamps amplitude to `band/2`; a band
-  narrower than `boss_oscillation_min_room` disables the bob (amplitude 0,
-  stationary fallback placement).  `_apply_oscillation` shifts the body
-  AND every hardpoint sprite by the same per-frame delta so destroyed
-  hardpoints (whose own `update` no longer repositions their barrel) stay
-  visually attached.  Config: `boss_oscillation_{amplitude,speed,min_room}`
-  in `[combat]`.
+  `body.height` is known (it calls `_attach_hardpoints`).
+- `BaseBoss.update()` applies the bob via `_apply_oscillation`, then ticks
+  live guns; only `weapon_type == "cannon"` mounts fire (aimed at the
+  player from the gun centre — sprite never rotates).  Lasers tick but do
+  not shoot yet.
+- **Vertical bob**: `set_oscillation(amplitude, speed)` after `place()`.
+  `_spawn_boss` computes the vertical band (floor↔ceiling, or floor↔world-
+  top when open), centres the boss, clamps amplitude to `band/2`; a band
+  narrower than `settings.oscillation_min_room` disables it.
+  `_apply_oscillation` shifts the body AND every gun sprite by the same
+  per-frame delta so destroyed guns stay visually attached.
 
 ### RunLevelView wiring
-- **Dedicated boss SpriteLists** — `_boss_body_list`,
-  `_boss_hp_base_list`, `_boss_hp_barrel_list` — NOT the shared
-  `_turret_*_list`.  Hardpoints are updated/fired by the boss (not
-  `_update_turrets`), and player-bullet collision is a dedicated pass in
-  `_check_player_bullet_hits` (hardpoint bases via
-  `next(h for h in boss.hardpoints …)`, then the body).  The brief's
-  "reuse `_turret_base_list` for free" does NOT work — the turret lookup
-  is against `self._turrets`, which boss hardpoints are intentionally not
-  in.  Do not add them there.
-- `BossBullet` subclasses `EnemyBullet` (uses `boss_shot1.png`) and goes
-  into `_enemy_bullet_list`, so existing move/cull/expiry and
-  player-damage all handle it for free.
+- **Dedicated boss SpriteLists** — `_boss_body_list`, `_boss_gun_list`
+  (NOT the shared `_turret_*_list`).  Guns are updated/fired by the boss,
+  and player-bullet collision is a dedicated pass in
+  `_check_player_bullet_hits` (gun sprites via `next(h for h in
+  boss.hardpoints if h.sprite is gun_sprite …)`, then the body).
+- **Z-order**: boss body + guns draw AFTER `_enemy_bullet_list` so boss
+  bullets emerge from under the gun/body; guns draw above the body.
+- `BossBullet` subclasses `EnemyBullet` (uses `boss_shot1.png`) into
+  `_enemy_bullet_list`.  Boss bullets are NOT time-limited — the cull loop
+  (`_update_turrets`) special-cases `BossBullet` to cull on leaving the
+  camera viewport (or terrain), so the player can't back out of range.
 - `_on_boss_zone_reached` → `_spawn_boss` (boss at `world_width*0.92`).
   `_update_boss` runs in `on_update` after the laser turrets; while
   `_boss_death_timer > 0` the death sequence owns the frame (early
   return).  `_finish_boss_death` is the ONLY boss path to
   `_trigger_level_complete` (+`level_num*500` score).
-- Hardpoint kill = `_on_hardpoint_destroyed` (explosion, +150, body
+- Gun kill = `_on_hardpoint_destroyed` (explosion, +150, body
   survives).  Body kill = `_start_boss_death` (hide sprites, scatter
-  explosions over `boss_death_duration`).  Ship contact with the body
+  explosions over `boss.settings.death_duration`).  Ship contact with body
   damages the player (`_check_enemy_hits`, shield-aware).
 - Patrol auto-spawns are suppressed while `self._boss is not None`; dock
   pressure spawns are not.
@@ -921,6 +936,22 @@ Phase 2 to read `cfg.terrain` + `cfg.levels[1]` exactly like
     - `assets/images/PNG/Parts/fuel-tower.png` (128 px tall)
     - `assets/images/PNG/Parts/scratch1.png` / `scratch2.png` / `scratch3.png`
     - `assets/images/PNG/Power-ups/bolt_gold.png` (fuel canister)
+
+### SVG art pipeline (bosses)
+- New boss art is authored as **SVG** in `assets/svg/`, converted to PNG
+  in `assets/images/` by `python src/base_attackers/svg_to_png.py`
+  (per-sprite sizes in its `BOSS_SPRITES` table; otherwise dims inferred
+  from the SVG `viewBox`).  Re-run it whenever the SVG changes; the game
+  loads only the PNGs.
+- Requires `cairosvg` (a **dev** dependency in `pyproject.toml`).  On
+  Windows `import cairosvg` also needs the native cairo DLL (`libcairo-2`)
+  on PATH — a fresh `pip install cairosvg` is not enough; install a cairo
+  runtime (e.g. GTK) if conversion fails.  This is dev-only; shipped
+  builds use the committed PNGs.
+- Combined "spec board" SVGs (e.g. `boss_alpha_left_facing.svg` — body +
+  weapon tiles + offset table + diagram in one file) are **reference
+  only**.  Export each sprite as its own SVG for conversion; do not feed
+  the board to the game.
 
 ---
 
