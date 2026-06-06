@@ -943,15 +943,18 @@ Phase 2 to read `cfg.terrain` + `cfg.levels[1]` exactly like
   (per-sprite sizes in its `BOSS_SPRITES` table; otherwise dims inferred
   from the SVG `viewBox`).  Re-run it whenever the SVG changes; the game
   loads only the PNGs.
-- Requires `cairosvg` (a **dev** dependency in `pyproject.toml`).  On
-  Windows `import cairosvg` also needs the native cairo DLL (`libcairo-2`)
-  on PATH — a fresh `pip install cairosvg` is not enough; install a cairo
-  runtime (e.g. GTK) if conversion fails.  This is dev-only; shipped
-  builds use the committed PNGs.
+- Renders with **Pillow only** (no native deps — Pillow ships with arcade;
+  also listed as a dev dep).  The converter is a **rect rasterizer**, NOT a
+  general SVG engine: it draws `<rect>` elements (x/y/w/h, `rx` rounded
+  corners, `fill`, `stroke`/`stroke-width`, `opacity`) onto a transparent
+  RGBA canvas.  The boss art is pure rect pixel-art, so output is exact;
+  paths/gradients/text are not rendered.  (cairosvg was dropped — its
+  native `libcairo-2` won't load on 64-bit Windows.)
 - Combined "spec board" SVGs (e.g. `boss_alpha_left_facing.svg` — body +
   weapon tiles + offset table + diagram in one file) are **reference
-  only**.  Export each sprite as its own SVG for conversion; do not feed
-  the board to the game.
+  only** and are **auto-skipped** by the converter (any SVG containing a
+  `<text>` element is treated as a board).  Export each sprite as its own
+  rect-only SVG for conversion.
 
 ---
 

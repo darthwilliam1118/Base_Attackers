@@ -15,7 +15,7 @@ dev = [
     "black",
     "cookiecutter",
     "pyinstaller>=6.10",
-    "cairosvg",
+    "pillow",
 ]
 
 [tool.pytest.ini_options]
