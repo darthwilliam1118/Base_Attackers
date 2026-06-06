@@ -86,7 +86,7 @@ laser_telegraph_color = [255, 180, 60, 120]   # RGBA dim orange
 # [level_N] boss = "<key>" (default "default").  Add more bosses as
 # [boss.<key>] and point levels at them.
 [boss.default]
-body_sprite = "assets/images/PNG/Enemies/boss_body.png"
+body_sprite = "assets/images/PNG/Bosses/boss_body.png"
 scale_factor = 4.0             # boss sprite = sprite_scale * this
 hp_base = 30                   # body HP at level 1
 hp_per_level = 10              # additional body HP per level above 1
@@ -102,13 +102,13 @@ oscillation_min_room = 60.0    # min floor-ceiling band (px) to enable bob
 # body's top-left (native px, may be negative).  type = "cannon" | "laser"
 # (laser is schema-only for now — does not fire yet).
 [[boss.default.weapons]]
-sprite = "assets/images/PNG/Enemies/boss_gun.png"
+sprite = "assets/images/PNG/Bosses/boss_gun.png"
 offset = [19, 69]
 type = "cannon"
 hp = 3
 
 [[boss.default.weapons]]
-sprite = "assets/images/PNG/Enemies/boss_gun.png"
+sprite = "assets/images/PNG/Bosses/boss_gun.png"
 offset = [19, 172]
 type = "cannon"
 hp = 3

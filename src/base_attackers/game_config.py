@@ -121,7 +121,7 @@ class BossSettings:
     ``GameConfig.boss_settings_for``).
     """
 
-    body_sprite: str = "assets/images/PNG/Enemies/boss_body.png"
+    body_sprite: str = "assets/images/PNG/Bosses/boss_body.png"
     scale_factor: float = 4.0  # boss sprite = sprite_scale * this
     hp_base: int = 30  # body HP at level 1
     hp_per_level: int = 10  # additional body HP per level above 1
@@ -142,10 +142,10 @@ def _default_bosses() -> dict[str, "BossSettings"]:
         "default": BossSettings(
             weapons=[
                 BossWeapon(
-                    "assets/images/PNG/Enemies/boss_gun.png", 19.0, 69.0, "cannon"
+                    "assets/images/PNG/Bosses/boss_gun.png", 19.0, 69.0, "cannon"
                 ),
                 BossWeapon(
-                    "assets/images/PNG/Enemies/boss_gun.png", 19.0, 172.0, "cannon"
+                    "assets/images/PNG/Bosses/boss_gun.png", 19.0, 172.0, "cannon"
                 ),
             ]
         )
