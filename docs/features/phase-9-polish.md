@@ -759,3 +759,95 @@ git commit -m "chore: update CLAUDE.md with Phase 9 patterns"
 5. **Run `python build.py` on Windows** — verify the exe works. If any
    asset is missing from the bundle, add it to the `datas` list in
    `base_attackers.spec`.
+
+---
+
+## Addendum — decisions & architecture changes during/after Phase 9
+
+This records the significant decisions and structural changes made while
+implementing Phase 9 and the boss-polish work that followed it.  CLAUDE.md
+has the authoritative day-to-day detail; this is the high-level rationale.
+
+### Font loading — real cross-platform bug fixed
+- Symptom: all HUD/menu text rendered in a system fallback font, not
+  KenVector.  `_load_fonts()` was correct and **was** being called (agf's
+  `GameWindowBase.__init__` calls it).
+- Root cause: pyglet selects its Windows font backend the first time
+  `pyglet.font` is imported, reading `win32_gdi_font` at that instant.  The
+  first `agf` import pulls in `arcade` → `pyglet.font`, so the option was
+  read **before** the entry point set it — DirectWrite locked in, and
+  DirectWrite cannot resolve a family name ending in a weight word
+  ("KenVector Future2 Thin").
+- Fix: both entry points (`main.py`, `src/base_attackers/__main__.py`) set
+  the `win32_gdi_font` / audio pyglet options block **above** the first
+  `agf` import.  Do not move it back down.
+
+### Bosses are now fully config-driven, one per level
+- Replaced the single hard-wired boss (old `[combat]` `boss_*` fields) with
+  `BossSettings` + `BossWeapon` dataclasses (`game_config.py`) and
+  `[boss.<key>]` TOML sections (incl. `[[boss.<key>.weapons]]`).  A level
+  selects its boss via `[level_N] boss = "<key>"`;
+  `GameConfig.boss_settings_for(level)` resolves it with a `"default"`
+  fallback (procedural levels included).  The `boss_*` fields were removed
+  from `CombatSettings`/`[combat]`.
+- `BaseBoss(world_x, level_num, settings, sprite_scale)`.  `BossGun` is a
+  single fixed weapon sprite (no base, no rotation, destructible) tagged
+  with `weapon_type` (`"cannon"`|`"laser"`).  A weapon's `offset` is its
+  sprite top-left relative to the body top-left in native px (may be
+  negative); weapons scale with the body and bob with it.
+- `[boss.default]` = the original level-1 boss; `[boss.alpha]` = the level-2
+  "dreadnought" (body 200×160, 2 cannons + 2 lasers).
+
+### Boss behaviours added
+- **Vertical bob**: slow sine oscillation centred in the available band
+  (floor↔ceiling, or floor↔world-top when open), amplitude clamped to the
+  room, disabled if the band is too tight.
+- **Cannons**: fixed sprite, bullets **aimed at the player** from the gun
+  centre.
+- **Lasers**: telegraph→firing→cooldown beam.  Decision: aim is **locked at
+  the player when the telegraph starts** (not continuously tracked) so the
+  warning beam is **dodgeable**; damage applied once on the firing
+  transition (shield-aware).  Driven by the view
+  (`_update_boss_lasers`/`_draw_boss_laser_beams`) on the existing
+  `cfg.combat.laser_*` timings.
+- **Boss bullets are NOT time-limited** — they cull on leaving the camera
+  viewport (or terrain), so the player can't retreat out of range and wait.
+- **Spawn-scroll-in**: the boss sits at `world_width * 0.92` and is created
+  once the camera's right edge comes within `_BOSS_SPAWN_LEAD` (~600 px) of
+  it, so it scrolls in from the right instead of popping into existence.
+  Boss firing is gated on-screen (`can_fire`); the bob runs regardless.
+- Z-order: boss body + guns draw **after** the enemy-bullet list (bullets
+  emerge from under the boss); guns above the body; laser beams above guns.
+
+### SVG → PNG art pipeline (boss art)
+- New boss art is authored as **SVG** (`assets/svg/`) and converted to PNG
+  by `src/base_attackers/svg_to_png.py`.  Decision: the converter is a
+  **Pillow rect-rasterizer** with **no native dependencies** — `cairosvg`
+  was dropped because its native `libcairo-2` won't load on 64-bit Windows
+  (the DLL the user found was 32-bit, wrong arch).  The dev dep is now
+  `pillow` (already present via arcade).
+- It renders rect-based pixel-art SVGs only (`<rect>` x/y/w/h, `rx`, `fill`,
+  `stroke`, `opacity`) to transparent RGBA, and **auto-skips spec boards**
+  (any SVG containing `<text>`, e.g. the combined `boss_alpha_left_facing`
+  reference sheet).  Export each sprite as its own rect SVG.
+- Workflow: the converter writes to `assets/images/` root; sprites are then
+  filed into subfolders by hand.  Boss PNGs live in
+  `assets/images/PNG/Bosses/` and the boss config points there.
+
+### HUD / radar / sound (the original Phase 9 body)
+- Implemented per the brief, with the corrections already noted above
+  (effects line uses `PowerUpManager.get_active_effects()` +
+  `display_label`; lives are icon sprites; debug HUD gated by `cfg.debug`;
+  radar `_draw_radar`; extra-life SFX on level complete).
+
+### Outstanding before a real release (NOT yet done)
+- **agf `v0.3.0` tagged + pinned** ✅ — the tag was created on agf commit
+  `cd9ed76` and pushed; `pyproject.toml` now pins
+  `…arcade-game-framework@v0.3.0`.  (Minor: agf's package `__version__` in
+  `agf/__init__.py` is still `"0.2.0"`, so `pip show` reports 0.2.0 even
+  though the git tag is v0.3.0 — cosmetic only.)
+- **Production config is not reset.**  Committed `game_config.toml` has
+  `debug = true` and `music_volume = 40` (active playtest values).  Reset
+  to `debug = false`, `music_volume = 80` (and confirm `starting_level = 1`,
+  `num_lives = 3`) before building a release.
+- **PyInstaller release build** not re-verified after the boss/art changes.
